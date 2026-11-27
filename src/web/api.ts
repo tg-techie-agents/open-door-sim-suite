@@ -338,6 +338,26 @@ export class Api {
     this.op_move_objects({ module, absnos: [absno], direction });
   }
 
+  // An object dropped before, after, or as a child of another in its module.
+  // Answers where it was, in the same terms, for Undo.
+  op_drag_object({ module, absno, target, where }: any): { target: number; where: string } {
+    const store = this.store;
+    return store.transaction(() => {
+      const obj = this._existing(module, absno), to = this._existing(module, target);
+      if (store.is_deleted(obj) || store.is_deleted(to)) throw new StoreError("a deleted object cannot be moved");
+      if (!["before", "after", "child"].includes(where)) throw new StoreError(`unknown place ${where}`);
+      const parent = store.parent_object(obj);
+      const siblings = store.child_objects(obj.module_id, parent ? parent.absno : null);
+      const at = siblings.findIndex((o) => o.equals(obj));
+      const was = at > 0 ? { target: siblings[at - 1].absno, where: "after" }
+        : at + 1 < siblings.length ? { target: siblings[at + 1].absno, where: "before" }
+          : { target: parent ? parent.absno : obj.absno, where: "child" };
+      if (where === "child") store.move_object(obj, to);
+      else store.move_object(obj, null, where === "after" ? to : null, where === "before" ? to : null);
+      return was;
+    });
+  }
+
   // Neighbours at one level, moved as a block: one place up or down, out a level
   // or in a level. Deleted objects among them stay where they are.
   op_move_objects({ module, absnos, direction }: any): void {

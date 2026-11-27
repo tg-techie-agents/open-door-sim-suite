@@ -714,7 +714,7 @@ function renderRow(row, attributeColumns, extra) {
     h("div", { class: "text" }, S.outlining ? "" : shown("Object Text", text))));
   if (S.outlining || (heading && !text)) main.querySelector(".text").style.minHeight = "0";
 
-  return h("tr", {
+  const tr = h("tr", {
     class: [`level${Math.min(row.level, 3)}`, row.deleted ? "deleted" : "", row.absno === S.selected ? "picked" : "",
       S.picks.has(row.absno) ? "chosen" : "", starts ? "linkstart" : ""].join(" "),
     "data-absno": row.absno,
@@ -743,6 +743,9 @@ function renderRow(row, attributeColumns, extra) {
     const content = c.cell(row);
     return h("td", { class: "trace computed" + (content.length ? "" : " blank"), "data-label": c.title }, content);
   }));
+  // a sorted view's order is not the module's, so there is nowhere to drop
+  if (editable && !row.deleted && !(S.sort && S.sortOn)) draggableRow(tr, row);
+  return tr;
 }
 
 const isCalculated = (name) => !!attribute(name)?.dxl;
@@ -1100,6 +1103,51 @@ const objectOperation = (operation, extra) => act(async () => {
   const row = needObject(true);
   await api(operation, { module: S.moduleId, absno: row.absno, ...extra });
   await refresh();
+  scrollToSelected();
+});
+
+// Drag an object by its ID cell onto another: the top third of the row drops it
+// before, the bottom third after, and the middle makes it a child.
+let dragged = null;
+
+function draggableRow(tr, row) {
+  const handle = tr.querySelector("td.id");
+  if (handle) {
+    handle.draggable = true;
+    handle.title = "Drag to move this object";
+    handle.addEventListener("dragstart", (e) => {
+      dragged = { module: S.moduleId, absno: row.absno, id: row.id };
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", row.id);
+    });
+    handle.addEventListener("dragend", () => { dragged = null; });
+  }
+  const zone = (e) => {
+    const box = tr.getBoundingClientRect(), part = (e.clientY - box.top) / box.height;
+    return part < 1 / 3 ? "before" : part > 2 / 3 ? "after" : "child";
+  };
+  const accepts = () => dragged && dragged.module === S.moduleId && dragged.absno !== row.absno;
+  tr.addEventListener("dragover", (e) => {
+    if (!accepts()) return;
+    e.preventDefault();
+    tr.dataset.drop = zone(e);
+  });
+  tr.addEventListener("dragleave", () => { delete tr.dataset.drop; });
+  tr.addEventListener("drop", (e) => {
+    delete tr.dataset.drop;
+    if (!accepts()) return;
+    e.preventDefault();
+    dropObject(dragged, row.absno, zone(e));
+    dragged = null;
+  });
+}
+
+const dropObject = (from, target, where) => act(async () => {
+  const { module, absno, id } = from;
+  const was = await api("drag_object", { module, absno, target, where });
+  remember(`move of ${id}`, () => api("drag_object", { module, absno, ...was }));
+  await refresh();
+  select(absno);
   scrollToSelected();
 });
 
