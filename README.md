@@ -207,7 +207,10 @@ what it prints is this suite's own wording.
   coverage name by name. Offered there means at least one form works.
 - Baseline sets, module copy, and history sessions work in part; a script stops
   where the manuals do not say what DOORS would do.
-- One window: the explorer and one module at a time, with no windows side by\n  side. A second browser tab cannot save over the first. Drag and drop moves one\n  object within its module (drag its ID); nothing else is dragged.\n- One person at a time. A script can lock and unlock a closed module, for that
+- One window: the explorer and one module at a time, with no windows side by
+  side. A second browser tab cannot save over the first. Drag and drop moves one
+  object within its module (drag its ID); nothing else is dragged.
+- One person at a time. A script can lock and unlock a closed module, for that
   run only; there are no lock lists, section locks, or shareable editing.
 - Columns and saved views work, and are shared with the interface. Built-in
   columns have stand-in widths.
