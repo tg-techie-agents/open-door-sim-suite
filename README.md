@@ -46,7 +46,9 @@ what is in it. A browser can discard what it keeps, so save to a file what
 matters. The demo is an invented hobby-greenhouse project with planted faults:
 missing links, a "TBD", failed tests, and edits since the last baseline.
 
-In the browser, the DXL window's Check button does what `check` does.
+In the browser, the DXL window's Check button does what `check` does. Help,
+DXL functions lists what `functions` prints, and Help also opens the project
+file format and the guide for an AI assistant.
 
 Open a database file takes a file saved from the page, a project file
 ([docs/project-format.md](docs/project-format.md)), or a database file the

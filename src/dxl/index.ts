@@ -30,6 +30,29 @@ export function coverage(): NameStatus[] {
   return name_status([build_library(), build_library(true)]);
 }
 
+/** What the engine offers whose name has `wanted` in it, one signature or loop to
+ *  a line. Layout DXL's own (display, displayRich) are among them. */
+export function signatures(wanted: string = ""): string[] {
+  const library = build_library(true);
+  const want = wanted.toLowerCase();
+  const lines: string[] = [];
+  for (const [fn, overloads] of [...library.functions].sort((a, b) => a[0].toLowerCase() < b[0].toLowerCase() ? -1 : 1)) {
+    if (!fn.toLowerCase().includes(want)) continue;
+    for (const o of overloads) lines.push(`${o.returns} ${fn}(${o.params.join(", ")})`);
+  }
+  for (const key of [...library.loops.keys()].sort()) {
+    const [source, variable] = key.split("\0");
+    if (`${source} ${variable}`.toLowerCase().includes(want)) lines.push(`for <${variable}> in <${source}> do`);
+  }
+  if (!want) {
+    for (const key of [...library.arrows.keys()].sort()) {
+      const [arrow, owner, variable] = key.split("\0");
+      lines.push(`for <${variable}> in <${owner}> ${arrow} "link module" do`);
+    }
+  }
+  return lines;
+}
+
 export class RunResult {
   unsaved: string[]; // paths of modules changed but never save()d
   rolled_back: boolean;

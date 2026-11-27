@@ -9,8 +9,7 @@ import { basename, dirname, extname, join, normalize, resolve, sep } from "node:
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { DxlError, check, run } from "./dxl/index.ts";
-import { build_library } from "./dxl/lib/index.ts";
+import { DxlError, check, run, signatures } from "./dxl/index.ts";
 import { export_module, import_csv } from "./io/csvio.ts";
 import { dump_project, load_project } from "./io/project.ts";
 import { decode_script, RealDisk } from "./node/disk.ts";
@@ -170,23 +169,7 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
   },
 
   functions([name]) {
-    const library = build_library(true); // layout DXL too: display, displayRich
-    const wanted = (name ?? "").toLowerCase();
-    const lines: string[] = [];
-    for (const [fn, overloads] of [...library.functions].sort((a, b) => a[0].toLowerCase() < b[0].toLowerCase() ? -1 : 1)) {
-      if (!fn.toLowerCase().includes(wanted)) continue;
-      for (const o of overloads) lines.push(`${o.returns} ${fn}(${o.params.join(", ")})`);
-    }
-    for (const key of [...library.loops.keys()].sort()) {
-      const [source, variable] = key.split("\0");
-      if (`${source} ${variable}`.toLowerCase().includes(wanted)) lines.push(`for <${variable}> in <${source}> do`);
-    }
-    if (!wanted) {
-      for (const key of [...library.arrows.keys()].sort()) {
-        const [arrow, owner, variable] = key.split("\0");
-        lines.push(`for <${variable}> in <${owner}> ${arrow} "link module" do`);
-      }
-    }
+    const lines = signatures(name ?? "");
     if (!lines.length) throw new Problem(`nothing matching '${name}': this engine does not offer it`);
     say(lines.join("\n"));
   },
@@ -270,7 +253,8 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
         throw new Problem("the interface is not built, and building it needs bun (https://bun.sh)");
       }
     }
-    const types: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+    const types: Record<string, string> = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
+      ".txt": "text/plain" };
     const port = Number(options.port ?? 8765);
     const serve_file = (request: IncomingMessage, response: ServerResponse) => {
       const path = (request.url ?? "/").split("?")[0];

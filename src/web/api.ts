@@ -7,7 +7,7 @@
 
 import { ROOT, RIGHTS, SYSTEM_ATTRIBUTES, AttrDxlError, Obj, Store, StoreError, rights_names } from "../store.ts";
 import { checked_doc, markup_of, parse, plain_of, slice, splice } from "../rich.ts";
-import { DxlError, check, coverage, layout, run } from "../dxl/index.ts";
+import { DxlError, check, coverage, layout, run, signatures } from "../dxl/index.ts";
 import type { DialogSession } from "../dxl/index.ts";
 import type { DialogEvent, Progress } from "../dxl/lib/dialogs.ts";
 import type { VirtualDisk } from "../dxl/files.ts";
@@ -1059,6 +1059,10 @@ export class Api {
 
   op_dxl_coverage(_args: any = {}): any {
     return coverage();
+  }
+
+  op_dxl_functions(_args: any = {}): any {
+    return signatures();
   }
 
   // -- attribute definitions ------------------------------------------------
