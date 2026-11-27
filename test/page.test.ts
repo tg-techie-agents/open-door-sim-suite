@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { read_file } from "./helpers.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SOURCES = ["app.js", "richtext.js", "extras.js", "select.js", "menus.js", "api.ts", "transport.ts", "worker.ts", "storage.ts", "index.html", "style.css", "web.css"];
+const SOURCES = ["app.js", "richtext.js", "extras.js", "select.js", "menus.js", "api.ts", "transport.ts", "host.ts", "worker.ts", "storage.ts", "index.html", "style.css", "web.css"];
 
 function put_global(name: string, value: unknown): () => void {
   const before = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -24,7 +24,7 @@ function put_global(name: string, value: unknown): () => void {
 
 describe("page files", () => {
   test("database text is never parsed as markup", () => {
-    for (const name of ["app.js", "richtext.js", "extras.js", "select.js", "menus.js", "transport.ts"]) {
+    for (const name of ["app.js", "richtext.js", "extras.js", "select.js", "menus.js", "transport.ts", "host.ts"]) {
       const script = read_file("src/web/" + name);
       for (const sink of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(",
         "new Function", "DOMParser", "createContextualFragment"]) {

@@ -58,6 +58,7 @@ const FEATURES = {
   openDatabase: ["Import and export", "Open database file...", "full", ""],
   writtenFiles: ["Import and export", "Files written by scripts...", "full", ""],
   resetExample: ["Import and export", "Reset to the example project...", "full", ""],
+  startScreen: ["Database", "Start screen...", "full", ""],
   // modes and locks
   modeExclusive: ["Editing", "Exclusive edit", "part", "you are the only user, so no lock is taken"],
   modeReadOnly: ["Editing", "Read-only", "part", "holds for editing on screen; a DXL run then has its database changes undone, but a script's dialog box buttons are not held to it"],
@@ -542,6 +543,8 @@ const MENUS = {
     M("writtenFiles", () => window.opendoorScriptFiles()),
     null,
     M("resetExample", () => window.opendoorFiles.reset()),
+    null,
+    M("startScreen", () => window.opendoorFiles.start()),
   ],
   Help: () => [
     M("helpPage", () => helpPage()),

@@ -3,6 +3,8 @@
 // Loaded before app.js; the menus it adds use app.js's own helpers.
 
 import * as boxes from "./dialogs.ts";
+import { entered, start_screen } from "./host.ts";
+import type { Host } from "./host.ts";
 import { read_saved, write_saved } from "./storage.ts";
 import type { Snapshot } from "./storage.ts";
 
@@ -30,6 +32,7 @@ type Pending = { id: number; output: string; resolve: (reply: any) => void; stop
 let worker: Worker | null = null;
 let ready: Promise<void> | null = null;
 let last: Snapshot | null = null; // what a new worker starts from
+let kept = false; // this browser holds a database of the person's own
 let pending: Pending | null = null;
 let queue: Promise<unknown> = Promise.resolve();
 let next_id = 1;
@@ -46,6 +49,7 @@ function storage_problem(e: any): void {
 
 async function keep(snapshot: Snapshot, replace = false): Promise<void> {
   last = snapshot;
+  kept = true;
   try {
     await write_saved(snapshot, replace);
     element("storage-problem").hidden = true;
@@ -61,7 +65,7 @@ function discard_worker(): void {
   ready = null;
 }
 
-function start_worker(snapshot: Snapshot | null): Promise<Snapshot | null> {
+function start_worker(snapshot: Snapshot | null, empty: string | null = null): Promise<Snapshot | null> {
   worker?.terminate();
   const made = new Worker("worker.js");
   worker = made;
@@ -84,7 +88,7 @@ function start_worker(snapshot: Snapshot | null): Promise<Snapshot | null> {
       else if (data.type === "progress") boxes.progress(data.progress);
       else pending.resolve(data);
     };
-    made.postMessage({ type: "init", snapshot });
+    made.postMessage({ type: "init", snapshot, empty });
   });
 }
 
@@ -97,9 +101,11 @@ async function boot(): Promise<void> {
     }
   }
   const saved = last;
+  if (saved) kept = true;
   try {
     const fresh = await start_worker(saved);
-    if (fresh) await keep(fresh);
+    // The untouched demo is not saved: nothing of the person's is in it yet.
+    if (fresh) last = fresh;
   } catch (e: any) {
     if (!saved) throw e;
     // Keep what is saved: never overwrite it with the example unasked.
@@ -204,12 +210,12 @@ const send_event: boxes.Send = (session, event) => in_turn(() => perform("dxl_ev
 
 // Start again from `snapshot` (null: the example) and show it. If it cannot be
 // opened, what was there stays.
-async function replace_database(snapshot: Snapshot | null): Promise<void> {
+async function replace_database(snapshot: Snapshot | null, empty: string | null = null): Promise<void> {
   boxes.clear(); // its script belongs to the database being replaced
   await in_turn(async () => {
     const before = last;
     try {
-      const fresh = await start_worker(snapshot);
+      const fresh = await start_worker(snapshot, empty);
       ready = Promise.resolve();
       await keep(fresh ?? snapshot!, true);
     } catch (e) {
@@ -250,7 +256,7 @@ const save_file = async () => {
   say("Saved " + name);
 };
 
-const open_file = () => chooseFile(".json,application/json", async (file) => {
+async function read_file(file: File): Promise<Snapshot> {
   let data: any;
   try {
     data = JSON.parse(await file.text());
@@ -260,9 +266,14 @@ const open_file = () => chooseFile(".json,application/json", async (file) => {
   if (data?.format !== "opendoor-browser" || data.version !== 1 || typeof data.dump !== "string") {
     throw new Error(`${file.name} is not a database saved from this page.`);
   }
+  return { dump: data.dump, database: file.name.replace(/\.opendoor\.json$|\.json$/i, ""),
+    files: Array.isArray(data.files) ? data.files : [] };
+}
+
+const open_file = () => chooseFile(".json,application/json", async (file) => {
+  const snapshot = await read_file(file);
   confirmDialog("Open database file", `Replace the database in this browser with ${file.name}?`, "Open", async () => {
-    await replace_database({ dump: data.dump, database: file.name.replace(/\.opendoor\.json$|\.json$/i, ""),
-      files: Array.isArray(data.files) ? data.files : [] });
+    await replace_database(snapshot);
     say("Opened " + file.name);
   });
 });
@@ -284,9 +295,23 @@ const script_files = async () => {
 };
 (window as any).opendoorScriptFiles = script_files;
 
-(window as any).opendoorFiles = { save: save_file, open: open_file, reset: reset_example }; // the Database menu
+const host: Host = {
+  kept: () => in_turn(async () => { await engine(); return kept ? last!.database : null; }),
+  read_file,
+  replace: async (snapshot) => {
+    await replace_database(snapshot);
+    element("storage-problem").hidden = true;
+  },
+  create: (name) => replace_database(null, name),
+  save_file,
+};
+
+// The Database menu.
+(window as any).opendoorFiles = { save: save_file, open: open_file, reset: reset_example,
+  start: () => start_screen(host) };
 
 document.addEventListener("DOMContentLoaded", () => {
+  if (!entered()) start_screen(host);
   // The phone's way to the database tree.
   element("menubar").prepend(h("button", { type: "button", id: "tree-toggle",
     onclick: () => document.body.classList.toggle("tree-open") }, "Tree"));

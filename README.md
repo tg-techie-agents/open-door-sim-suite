@@ -29,8 +29,11 @@ Node.js.
 After the build, `start-mac.command` and `start-windows.bat` start it by
 double-click.
 
-The first start shows an invented hobby-greenhouse project with planted faults:
-missing links, a "TBD", failed tests, and edits since the last baseline.
+In the interface, a start screen offers the demo, a new empty database, or a
+database file saved earlier; Database, Start screen brings it back. The browser
+keeps one database at a time. The demo is an invented hobby-greenhouse project
+with planted faults: missing links, a "TBD", failed tests, and edits since the
+last baseline.
 
 ## Command line
 

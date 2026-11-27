@@ -28,7 +28,8 @@ function snapshot(): Snapshot {
   return { dump: api.store.dumps(), database: api.database, files: Array.from(api.disk) };
 }
 
-function start(saved: Snapshot | null): void {
+// With nothing saved: the demo project, or an empty database named `empty`.
+function start(saved: Snapshot | null, empty: string | null): void {
   const disk = new VirtualDisk();
   let store: Store;
   if (saved) {
@@ -36,9 +37,9 @@ function start(saved: Snapshot | null): void {
     for (const [path, text] of saved.files) disk.set(path, text);
   } else {
     store = new Store();
-    load_project(store, EXAMPLE);
+    if (empty === null) load_project(store, EXAMPLE);
   }
-  api = new Api(store, saved ? saved.database : "demo", SCRIPTS, disk);
+  api = new Api(store, saved ? saved.database : empty ?? "demo", SCRIPTS, disk);
 }
 
 // Output is sent as it appears, so that it survives if the script has to be stopped.
@@ -68,7 +69,7 @@ function describe(e: any): string {
 scope.onmessage = ({ data }: any) => {
   if (data.type === "init") {
     try {
-      start(data.snapshot);
+      start(data.snapshot, data.empty ?? null);
       scope.postMessage({ type: "ready", snapshot: data.snapshot ? null : snapshot() });
     } catch (e) {
       scope.postMessage({ type: "init_error", message: describe(e) });
