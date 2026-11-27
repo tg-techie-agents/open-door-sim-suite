@@ -8,7 +8,7 @@
 import { check_end } from "./pending.ts";
 import { parse_date, _SPACE, _ascii_digits, _repr, _strip } from "../../store.ts";
 import { Fault } from "../runtime.ts";
-import { current_module, shown } from "./database.ts";
+import { current_module, shown, sibling_step } from "./database.ts";
 import { definition, display } from "./displayset.ts";
 import { translate_regexp } from "./text.ts";
 
@@ -306,6 +306,38 @@ export function register(lib: any): void {
     (rt: any, a: any, b: any) => [...rt.need(a, "Sort"), ...rt.need(b, "Sort")]);
   lib.add("set", ["Sort"], "void", (rt: any, s: any) => apply_sort(rt, current_module(rt), s));
   lib.add("set", ["Module", "Sort"], "void", apply_sort);
+  lib.add("destroySort", ["Module"], "void",
+    (rt: any, m: any) => { display(rt, rt.opened_module(m)).sort = []; });
+
+  // the next or previous sibling the filter matches
+  for (const [name, direction] of [["next", 1], ["previous", -1]] as const) {
+    lib.add(name, ["Object", "Filter"], "Object", (rt: any, o: any, test: any) => {
+      rt.need(test, "Filter");
+      let found = sibling_step(rt, o, direction);
+      while (found !== null && !test(rt, found)) found = sibling_step(rt, found, direction);
+      return found;
+    });
+  }
+
+  // These switch filtering in the module explorer alone. There is no explorer
+  // here, so no object is affected.
+  const explorer = (rt: any): Map<number, boolean> => {
+    let on = rt.state.get("explorer filtering");
+    if (!on) rt.state.set("explorer filtering", on = new Map());
+    return on;
+  };
+  for (const [name, on] of [["applyFiltering", true], ["unApplyFiltering", false]] as const) {
+    lib.add(name, ["Module"], "void",
+      (rt: any, m: any) => { explorer(rt).set(rt.opened_module(m), on); });
+  }
+  lib.add("applyingFiltering", ["Module"], "bool", (rt: any, m: any) => {
+    const on = explorer(rt).get(rt.opened_module(m));
+    if (on === undefined) {
+      throw new Fault("applyingFiltering: whether the module explorer starts with filtering on is not documented; "
+        + "call applyFiltering or unApplyFiltering first");
+    }
+    return on;
+  });
 }
 
 export function ancestors_shown(rt: any, module_id: any): boolean {

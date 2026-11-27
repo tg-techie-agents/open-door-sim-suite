@@ -606,9 +606,17 @@ export function load(rt: any, module_id: any, wanted: any, display: boolean): an
   return found ? rt.open(found.copy_id, "read") : null;
 }
 
+/** `baseline(modver)`: only the version's major, minor and suffix are filled in. */
+export class Designation extends Wanted {}
+
+const DESIGNATION = new Set(["major", "minor", "suffix"]);
+
 export function read_baseline(field: string): (rt: any, baseline: any) => any {
   return (rt: any, baseline: any) => {
-    if (!(rt.need(baseline, "Baseline") instanceof Baseline)) {
+    if (rt.need(baseline, "Baseline") instanceof Designation && DESIGNATION.has(field)) {
+      return (baseline as any)[field];
+    }
+    if (!(baseline instanceof Baseline)) {
       throw new Fault("use this on a Baseline from a `for b in module` loop");
     }
     return baseline[field];
@@ -653,6 +661,13 @@ export function register_baselines(lib: any): void {
   lib.add("load", ["Module", "Baseline", "bool"], "Module", load);
   lib.add("baselineExists", ["Module", "Baseline"], "bool",
     (rt: any, m: any, b: any) => matching(rt, m, b) !== null);
+  // a ModuleVersion of a current version is no baseline
+  lib.add("baseline", ["ModuleVersion"], "Baseline", (rt: any, v: any) => {
+    const found = rt.store.baseline_of(rt.need(v, "ModuleVersion"));
+    return found ? new Designation(found.major, found.minor, found.suffix) : null;
+  });
+  lib.add("baselineExists", ["ModuleVersion"], "bool",
+    (rt: any, v: any) => Boolean(rt.store.baseline_of(rt.need(v, "ModuleVersion"))));
   lib.add("getMostRecentBaseline", ["Module"], "Baseline", most_recent);
   lib.add("getMostRecentBaseline", ["Module", "bool"], "Baseline", most_recent);
   for (const name of ["baseline", "isBaseline"]) {

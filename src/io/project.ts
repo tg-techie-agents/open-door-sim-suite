@@ -739,7 +739,8 @@ function _load(store: Store, data: any): void {
   const ids = store.dated(_get(data, "created_on"), () => _load_content(store, data));
   _iter(_get(data, "steps", [])).forEach((step, index) => {
     try {
-      _step(store, step, ids);
+      // a step with no date of its own is made now
+      store.dated(_is_dict(step) ? _get(step, "created_on") : null, () => _step(store, step, ids));
     } catch (error) {
       if (!(error instanceof StoreError)) throw error;
       throw new StoreError(`step ${index + 1}: ${error.message}`);
@@ -1196,7 +1197,7 @@ function _step(store: Store, step: any, ids: Map<string, number>): void {
     throw new TypeError(`unhashable type: '${_kind(op)}'`);
   }
   if (typeof op !== "string" || !Object.hasOwn(STEP_KEYS, op)) throw new StoreError(`unknown op ${_repr(op)}`);
-  _only(step, [...STEP_KEYS[op], "op"], op);
+  _only(step, [...STEP_KEYS[op], "op", "created_on"], op);
 
   const obj = (ref: any): Obj => {
     const table: _Table = new Map([...ids].map(([where, m]) =>

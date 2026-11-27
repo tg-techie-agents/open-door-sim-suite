@@ -181,6 +181,7 @@ export class Compiler {
 
   check_name(line: number, name: string): void {
     if (RESERVED.has(name) || TYPES.has(name)) throw new DxlError(line, `${name} is a reserved word`);
+    if (name.startsWith("_")) throw new DxlError(line, `${name}: a DXL name must begin with a letter`);
   }
 
   declare(line: number, name: string, type_name: string, by_ref: boolean = false): Var {
@@ -482,8 +483,14 @@ export class Compiler {
     }
     if (found.length > 1) throw new Ambiguous(line, "ambiguous expression: add parentheses");
     if (!found.length) {
-      throw new DxlError(line, `(+=) inside or after parentheses only appends to a Buffer: got ${show(targets)} `
-        + `and ${show(sources)}`);
+      // `print (x += 2.0)`: a real assignment is also the new value
+      const var_ = target[0] === "name" ? this.lookup(target[2]) : null;
+      if (var_ instanceof Var && var_.type === "real") {
+        const assign = this.s_assign(["assign", line, "+=", target, source]), get = this.load(line, var_);
+        return [["real", (env) => { assign(env); return get(env); }]];
+      }
+      throw new DxlError(line, `(+=) inside or after parentheses only appends to a Buffer or adds to a real variable: `
+        + `got ${show(targets)} and ${show(sources)}`);
     }
     return found;
   }
@@ -1297,6 +1304,10 @@ export class Compiler {
     if (op === "=") {
       f = this.assigned(line, cands, var_.type);
     } else {
+      if (var_.type === "Buffer" && op === "+=") {
+        throw new DxlError(line, `(+=) appends a string, char or Buffer to a Buffer, not ${show(cands)}; make it a string `
+          + `first by joining "" to it, as in: b += o."Object Text" ""`);
+      }
       if (var_.type !== "int" && var_.type !== "real") {
         throw new DxlError(line, `(${op}) is not supported for ${var_.type}`);
       }

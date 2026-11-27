@@ -213,16 +213,16 @@
     {"module": "/Greenhouse Demo/verifies", "from": "TC-18", "to": "SUB-2"}
   ],
   "steps": [
-    {"op": "baseline", "module": "/Greenhouse Demo/Stakeholder Needs", "annotation": "Preliminary design review"},
-    {"op": "baseline", "module": "/Greenhouse Demo/System Requirements", "annotation": "Preliminary design review"},
-    {"op": "baseline", "module": "/Greenhouse Demo/Subsystem Requirements", "annotation": "Preliminary design review"},
-    {"op": "baseline", "module": "/Greenhouse Demo/Verification", "annotation": "Preliminary design review"},
+    {"op": "baseline", "created_on": "2026-02-02 17:00:00", "module": "/Greenhouse Demo/Stakeholder Needs", "annotation": "Preliminary design review"},
+    {"op": "baseline", "created_on": "2026-02-02 17:00:00", "module": "/Greenhouse Demo/System Requirements", "annotation": "Preliminary design review"},
+    {"op": "baseline", "created_on": "2026-02-02 17:00:00", "module": "/Greenhouse Demo/Subsystem Requirements", "annotation": "Preliminary design review"},
+    {"op": "baseline", "created_on": "2026-02-02 17:00:00", "module": "/Greenhouse Demo/Verification", "annotation": "Preliminary design review"},
 
-    {"op": "set", "object": "SRS-2", "text": "The system shall hold the air temperature within 1.5 °C of the set point while the outside temperature is between -10 °C and 35 °C."},
-    {"op": "set", "object": "SRS-14", "text": "The system shall keep monitoring and alerting for at least 8 hours after mains power is lost.", "values": {"Rationale": "Owners reported overnight power cuts."}},
-    {"op": "add", "module": "/Greenhouse Demo/System Requirements", "after": "SRS-12", "text": "The system shall alert the user when the backup battery is below 20 % charge.", "values": {"Priority": "Medium", "Verification Method": "Test"}},
-    {"op": "link", "module": "/Greenhouse Demo/satisfies", "from": "SRS-20", "to": "STK-7"},
-    {"op": "delete", "object": "SRS-19"},
-    {"op": "set", "object": "TC-5", "values": {"Verification Status": "Failed"}}
+    {"op": "set", "created_on": "2026-02-16 09:00:00", "object": "SRS-2", "text": "The system shall hold the air temperature within 1.5 °C of the set point while the outside temperature is between -10 °C and 35 °C."},
+    {"op": "set", "created_on": "2026-02-16 09:00:00", "object": "SRS-14", "text": "The system shall keep monitoring and alerting for at least 8 hours after mains power is lost.", "values": {"Rationale": "Owners reported overnight power cuts."}},
+    {"op": "add", "created_on": "2026-02-16 09:00:00", "module": "/Greenhouse Demo/System Requirements", "after": "SRS-12", "text": "The system shall alert the user when the backup battery is below 20 % charge.", "values": {"Priority": "Medium", "Verification Method": "Test"}},
+    {"op": "link", "created_on": "2026-02-16 09:00:00", "module": "/Greenhouse Demo/satisfies", "from": "SRS-20", "to": "STK-7"},
+    {"op": "delete", "created_on": "2026-02-16 09:00:00", "object": "SRS-19"},
+    {"op": "set", "created_on": "2026-02-16 09:00:00", "object": "TC-5", "values": {"Verification Status": "Failed"}}
   ]
 }

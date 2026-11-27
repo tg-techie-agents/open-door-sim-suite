@@ -95,6 +95,11 @@ Edits applied in order after everything above, to give a file a past:
 | `delete` | `object` |
 | `link`, `unlink` | `module` (link module path), `from`, `to` |
 
+Any step may also take `created_on` (`"2026-02-16 09:00:00"`), the date it was
+made; without it, the step is made at loading time. Date the baselines earlier
+than the edits after them, or a "changed since the baseline" report that
+compares dates finds nothing.
+
 ## Baselines in an exported file
 
 An optional top-level `"created_on": "2026-01-12 09:00:00"` dates everything

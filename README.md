@@ -214,6 +214,9 @@ what it prints is this suite's own wording.
 - Formatted text has no fonts, colours, links, pictures, tables, or numbered
   lists (see Formatted text above).
 - The only code page is `CP_UTF8`.
+- Script files are read as UTF-8. One saved by DOORS or Windows in another
+  encoding is refused where a string holds an unreadable character: save it as
+  UTF-8 first.
 - `pragma runLim` is accepted and not enforced; the command line stops a script after 10 minutes (`--timeout`). Recursion is limited to a few
   hundred levels. No function-pointer parameters; of operator definitions, only `::` ones.
 - ReqIF has not been checked against DOORS.

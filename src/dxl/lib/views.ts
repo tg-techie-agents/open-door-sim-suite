@@ -282,6 +282,22 @@ function register_columns(lib: Library): void {
   lib.add("dxl", ["Column"], "string", dxl_code);
   lib.add("dxl", ["Column", "string"], "void", set_dxl);
   lib.add("text", ["Column", "Object"], "string", column_text);
+  lib.add("isAscending", ["Column"], "bool", (rt, c) => column_sorted(rt, c, false));
+  lib.add("isDescending", ["Column"], "bool", (rt, c) => column_sorted(rt, c, true));
+}
+
+// Whether the module is sorted on what this column shows, in that direction.
+function column_sorted(rt: Runtime, ref: any, descending: boolean): boolean {
+  const column = column_of(rt, ref);
+  const state = display(rt, ref.module_id);
+  if (!state.sort.length) return false;
+  if (!state.sorting) {
+    throw new Fault("whether a column counts as sorted while sorting is off is not documented; write sorting on");
+  }
+  if (column.kind !== "attribute") throw new Fault("whether a column that shows no attribute is sorted is not known here");
+  const at = state.sort.findIndex(([name]) => name === column.attribute);
+  if (at > 0) throw new Fault("whether a column that is only a later key of a sort counts as sorted is not documented");
+  return at === 0 && state.sort[0][1] === descending;
 }
 
 // -- saved views --------------------------------------------------------------

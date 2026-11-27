@@ -719,12 +719,15 @@ export function register_objects(lib: Library): void {
   lib.add("move", ["Object", "LastBelow_"], "void",
     (rt: Runtime, o: any, to: any) => move(rt, o, new Map([["parent", to]])));
   lib.add("softDelete", ["Object"], "void", soft_delete);
-  lib.add("hardDelete", ["Object"], "void", (rt: Runtime, o: any) => {
-    rt.editing(rt.obj(o).module_id);
-    deletable(rt, o, "hardDelete", true);
-    rt.store.purge_object(o);
-    if (rt.object !== null && equals(rt.object, o)) rt.object = null;
-  });
+  // `delete(o)` is the manual's older spelling of hardDelete
+  for (const name of ["hardDelete", "delete"]) {
+    lib.add(name, ["Object"], "void", (rt: Runtime, o: any) => {
+      rt.editing(rt.obj(o).module_id);
+      deletable(rt, o, name, true);
+      rt.store.purge_object(o);
+      if (rt.object !== null && equals(rt.object, o)) rt.object = null;
+    });
+  }
   lib.add("gotoObject", ["int", "Module"], "Object", (rt: Runtime, absno: number, m: any) => {
     const found = object_by_number(rt, absno, m);
     if (found !== null) rt.make_current(found);

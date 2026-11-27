@@ -77,7 +77,9 @@ const TOKEN = new RegExp([
   String.raw`(?<nl>\n)`,
   String.raw`(?<include>#include[ \t]*(?:"[^"\n]*"|<[^>\n]*>))`,
   String.raw`(?<hashpragma>#pragma[^\n]*)`,
-  String.raw`(?<real>\d+\.\d+(?:[eE][+\-]?\d+)?|\d+[eE][+\-]?\d+)`,
+  // either the integer or the fraction part of a real may be left out; `..` is not a real's point,
+  // and a point attached to a name or a bracket is not the start of one
+  String.raw`(?<real>(?:\d+\.(?!\.)\d*|(?<![\w'\)\]\.])\.\d+)(?:[eE][+\-]?\d+)?|\d+[eE][+\-]?\d+)`,
   String.raw`(?<int>0[xX][0-9A-Fa-f]+|0[bB][01]+|\d+)`,
   String.raw`(?<name>[A-Za-z_][A-Za-z0-9_']*)`,
   // a string may run over lines; a backslash at the end of a line has no documented meaning
@@ -150,6 +152,11 @@ export function tokenize(source: string): Token[] {
       if (tokens.length && tokens[tokens.length - 1].kind === "nl" && (kind === "op" || kind === "name")
         && (text === ")" || text === "else")) {
         tokens.pop();
+      }
+      // U+FFFD is what is left of a byte that was not UTF-8: the value would silently differ in DOORS
+      if ((kind === "string" || kind === "char") && text.includes("�")) {
+        throw new DxlError(line, "this text holds a character that could not be read (shown as �): "
+          + "the file is probably not saved as UTF-8. Save it as UTF-8 and load it again");
       }
       if (kind === "string" || kind === "char") text = unescape(text.slice(1, -1).replace(/\r\n/g, "\n"));
       tokens.push(new Token(kind, text, line, spaced));
@@ -268,6 +275,10 @@ export class Parser {
     }
     if (this.at("switch", "struct", "union", "enum")) {
       throw new DxlError(line, `${this.tok.text} is a word DXL reserves but DOORS does not support in scripts`);
+    }
+    if (this.at("static")) {
+      throw new DxlError(line, "static is a DXL keyword this practice suite does not offer: "
+        + "how long a static variable keeps its value is not documented");
     }
     if (this.accept("const")) return this.statement();
     if (this.accept("if") || this.accept("elseif")) {
