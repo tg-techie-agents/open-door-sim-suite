@@ -1840,7 +1840,8 @@ function buildDxl() {
   $("dxl").replaceChildren(
     h("div", { class: "titlebar" }, "DXL Interaction", h("button", { onclick: () => { $("dxl").hidden = true; }, title: "Close" }, "x")),
     h("div", { class: "tools" },
-      DXL.run, h("label", { title: "Database changes are undone after the run. Files the script writes stay written." }, DXL.dry, " Try without saving"),
+      DXL.run, h("button", { onclick: () => act(checkDxl), title: "Find errors without running" }, "Check"),
+      h("label", { title: "Database changes are undone after the run. Files the script writes stay written." }, DXL.dry, " Try without saving"),
       h("label", { title: "What confirm() returns" }, DXL.yes, " Answer Yes to confirm()"),
       DXL.scripts,
       h("button", { onclick: () => chooseFile(".dxl,.inc,.txt", openScript) }, "Open file..."),
@@ -1894,6 +1895,19 @@ function goToLine(line) {
   DXL.source.focus();
   DXL.source.setSelectionRange(start, start + (lines[line - 1] || "").length);
   DXL.source.scrollTop = Math.max(0, (line - 5) * (parseFloat(getComputedStyle(DXL.source).lineHeight) || 17));
+}
+
+async function checkDxl() {
+  const { error } = await api("check", { source: DXL.source.value });
+  $("dxl").classList.add("ran");
+  if (!error) {
+    DXL.result.replaceChildren(h("div", { class: "note" },
+      "Check found no errors. Nothing was run, so errors that only a run meets are not ruled out."));
+    return;
+  }
+  const { line, file, message } = error;
+  const where = line ? `${file ? file + ", " : ""}line ${line}: ` : "";
+  DXL.result.replaceChildren(h("div", { class: "fault", onclick: () => { if (line && !file) goToLine(line); } }, where + message));
 }
 
 async function runDxl() {
