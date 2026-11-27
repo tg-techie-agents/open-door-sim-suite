@@ -1795,6 +1795,16 @@ function writtenFile(path, text) {
         /\.csv$/i.test(path) ? "text/csv" : "text/plain") }, "Download")));
 }
 
+// What a run that does not save would have done to a folder on the computer.
+function heldBack({ folder, write, remove }) {
+  return h("div", { class: "files" },
+    h("div", { class: "heading" }, `Nothing was written to the folder ${folder}, and its copies are as they were.`),
+    write.length ? h("div", {}, "It would have written:") : null,
+    write.map((f) => writtenFile(f.name, f.text)),
+    remove.length ? h("div", {}, `It would have removed these copies: ${remove.map(shownPath).join(", ")}. `
+      + "The real files are never removed.") : null);
+}
+
 // ---------------------------------------------------------------- DXL window
 
 const DXL = {};
@@ -1932,8 +1942,10 @@ async function runDxl() {
         ? "Dialog box open: its callbacks run when you use it." : "Script finished."));
     }
     if (reply.rolled_back) parts.push(h("div", { class: "note" }, DXL.dry.checked
-      ? "Try without saving: database changes were undone. Files written by the script remain."
-      : "The module is open read-only: database changes were undone (DOORS would refuse them). Files written remain."));
+      ? "Try without saving: database changes were undone. Files written by the script remain"
+        + (reply.held ? `, except in the folder ${reply.held.folder}.` : ".")
+      : "The module is open read-only: database changes were undone (DOORS would refuse them). Files written remain"
+        + (reply.held ? `, except in the folder ${reply.held.folder}.` : ".")));
     else if (reply.unsaved.length) parts.push(h("div", { class: "note" }, "Changed without save(). Kept here, but real DOORS would not keep these unless the script saves: " + reply.unsaved.join(", ")));
     // What the script wrote goes first, above however much it printed.
     const files = reply.files || [];
@@ -1944,6 +1956,7 @@ async function runDxl() {
         h("div", { class: "note" }, "Download puts a copy in your downloads folder. The files also stay in this browser: Written files, or the Desktop.")));
       say(`Script wrote ${files.map((f) => shownPath(f.name)).join(", ")}: View or Download it in the DXL window.`);
     }
+    if (reply.held) parts.unshift(heldBack(reply.held));
     DXL.result.replaceChildren(...parts.filter(Boolean));
     DXL.result.scrollTop = 0;
   } catch (e) {
