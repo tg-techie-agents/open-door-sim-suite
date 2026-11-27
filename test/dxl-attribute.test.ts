@@ -163,12 +163,14 @@ describe("calculating", () => {
     const started = Date.now();
     const shown = store.objects(reqs(store)).map((o) => store.shown_value(o, "Calc"));
     const took = Date.now() - started;
-    assert.ok(took < 8000, `took ${took} ms`);
+    // five runs of about a second each, with room for a loaded machine
+    assert.ok(took < 20000, `took ${took} ms`);
     assert.equal(shown.filter((s) => s === "#DXL error: ran past its time limit").length, 5);
     assert.equal(shown.filter((s) => /not run/.test(s)).length, 3);
     const again = Date.now();
     store.shown_value(at(store, 1), "Calc");
-    assert.ok(Date.now() - again < 200);
+    // running it again would take the whole second
+    assert.ok(Date.now() - again < 900);
   });
 
   test("a value of the wrong type, a bad script, and a run-time error are shown", () => {

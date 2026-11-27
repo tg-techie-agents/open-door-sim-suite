@@ -281,7 +281,7 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
         return;
       }
       response.writeHead(200, { "content-type": types[extname(file)] + "; charset=utf-8", "cache-control": "no-store",
-        "content-security-policy": "frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" });
+        "content-security-policy": "frame-ancestors 'self'", "x-content-type-options": "nosniff", "x-frame-options": "SAMEORIGIN" }); // windows.html frames the app
       response.end(readFileSync(file));
     };
     const server = createServer((request, response) => {

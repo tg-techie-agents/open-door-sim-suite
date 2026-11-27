@@ -46,9 +46,14 @@ export async function desktop(host: Host): Promise<void> {
   const databases = h("div", { class: "tiles" });
   const files = h("section", { hidden: true });
   const back = h("button", { type: "button", class: "primary back", hidden: true, onclick: () => leave() }, "Back to DOORS");
+  // winchild.js offers windows where the screen has room for them.
+  const windows = h("button", { type: "button", hidden: true, onclick: () => {
+    leave();
+    (window as any).opendoorWindows();
+  } }, "Open DOORS in windows");
   const box = h("dialog", { class: "desktop", "aria-label": "Desktop" },
     h("div", { class: "desk" },
-      h("header", {}, h("h1", {}, "OpenDoor desktop"), back),
+      h("header", {}, h("h1", {}, "OpenDoor desktop"), h("span", {}, windows, " ", back)),
       h("p", {}, "A practice tool for DOORS and DXL; not DOORS. Made-up data only. Everything stays in this browser, "
         + "which can lose it: save a database to a file to keep a copy."),
       problem,
@@ -160,6 +165,7 @@ export async function desktop(host: Host): Promise<void> {
     // Something is open to go back to once the desktop has been left, or is kept.
     back.hidden = !(open || entered());
     files.hidden = back.hidden;
+    windows.hidden = back.hidden || innerWidth <= 700 || !(window as any).opendoorWindows;
     if (!files.hidden) {
       let list: [string, string][] = [];
       try {

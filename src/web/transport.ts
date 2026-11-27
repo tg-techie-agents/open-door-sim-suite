@@ -35,6 +35,16 @@ let unsaved = false; // the open database has changes only this page holds
 let pending: Pending | null = null;
 let queue: Promise<unknown> = Promise.resolve();
 let next_id = 1;
+let writes = 0; // snapshots kept: how windows.html knows that something changed
+
+// In a window of windows.html the engine and its storage belong to the top page (shell.js).
+const shell: any = (() => {
+  try {
+    return globalThis.window?.parent === globalThis.window ? null : (window.parent as any).opendoorShell ?? null;
+  } catch {
+    return null;
+  }
+})();
 
 const element = (id: string) => document.getElementById(id)!;
 const stop_button = element("stop"); // kept here: it moves between the page and dialogs
@@ -50,6 +60,7 @@ function storage_problem(e: any): void {
 async function keep(snapshot: Snapshot, replace = false): Promise<void> {
   last = snapshot;
   kept = true;
+  writes++;
   try {
     await write_saved(snapshot, replace);
     unsaved = false;
@@ -168,6 +179,13 @@ function send(message: any, limit: boolean): Promise<any> {
 }
 
 async function perform(operation: string, args: any): Promise<any> {
+  if (shell) {
+    try {
+      return JSON.parse(await shell.perform(window, operation, JSON.stringify(args)));
+    } catch (e: any) {
+      throw new Error(e.message); // an Error of this window, not the top page's
+    }
+  }
   await engine();
   let reply: any;
   try {
@@ -339,10 +357,28 @@ const host: Host = {
   use: (path, text) => (window as any).opendoorUse(path, text),
 };
 
-(window as any).opendoorDesktop = () => desktop(host);
+(window as any).opendoorDesktop = () => (shell ? shell.leave("index.html#desktop") : desktop(host));
+
+// What windows.html needs of the engine it holds for its windows.
+(window as any).opendoorEngine = {
+  perform: (operation: string, args: any, changed: () => void) => in_turn(async () => {
+    const before = writes;
+    try {
+      return await perform(operation, args);
+    } finally {
+      if (writes !== before) changed();
+    }
+  }),
+  database: () => current_key(),
+};
+(window as any).opendoorCloseBoxes = boxes.clear;
+(window as any).opendoorUnsaved = () => unsaved; // leaving the page would lose changes
 
 document.addEventListener("DOMContentLoaded", () => {
-  if (!entered()) desktop(host);
+  // windows.html has no app of its own, and its windows have no desktop.
+  if (shell || !document.getElementById("main")) return;
+  if (!entered() || location.hash === "#desktop") desktop(host);
+  if (location.hash) history.replaceState(null, "", location.pathname);
   element("menubar").append(h("button", { type: "button", id: "to-desktop", onclick: () => desktop(host) }, "Desktop"));
   // The phone's way to the database tree.
   element("menubar").prepend(h("button", { type: "button", id: "tree-toggle",
