@@ -202,6 +202,24 @@ describe("DXL window", () => {
     assert.equal(dxl(source, { confirm_yes: true }).output, "[confirm] go? -> yes\nyes");
   });
 
+  test("current is the object the person is on", () => {
+    const module = call("create_item", { parent: 1, name: "C", kind: "formal", prefix: "C-" }).id;
+    call("add_object", { module });
+    call("add_object", { module });
+    call("add_object", { module });
+    const on = (object: number | null) => dxl("Object o = current\nprint identifier(o)", { module, object }).output;
+    const first = on(null);
+    assert.equal(on(3), "C-3");
+    assert.equal(on(9999), first);
+  });
+
+  test("CSV import names the blank rows it skips, and says what a view export is", () => {
+    const module = call("create_item", { parent: 1, name: "V", kind: "formal", prefix: "V-" }).id;
+    const reply = call("import_csv", { module, text: "ID,Object Heading\n,a\n,\n,c\n,\n" });
+    assert.deepEqual([reply.created, reply.blank_rows], [2, [3]]);
+    refused(/Export CSV\.\.\./, "import_csv", { module, text: "ID,Number,V\nV-1,1,a\n" });
+  });
+
   test("the open module, and trying without saving", () => {
     const module = call("create_item", { parent: 1, name: "M", kind: "formal" }).id;
     const reply = dxl('Module m = current\nObject o = create m\nprint "ok"', { module, dry_run: true });

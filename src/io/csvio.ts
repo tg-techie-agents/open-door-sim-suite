@@ -155,10 +155,12 @@ const _BLANK = new RegExp(`^[${_SPACE}]*$`);
 // moved or deleted. Errors name the spreadsheet row (the header is row 1).
 //
 // `file_object` is the text itself, its bytes, or anything with `read()`.
-// Returns {"created": n, "updated": n, "ignored_columns": [...]}.
+// A row with nothing in it creates nothing; those that have rows after them are
+// named in "blank_rows".
+// Returns {"created": n, "updated": n, "ignored_columns": [...], "blank_rows"?: [...]}.
 export function import_csv(store: Store, module_id: number,
                            file_object: string | Uint8Array | { read(): string }):
-    { created: number; updated: number; ignored_columns: string[] } {
+    { created: number; updated: number; ignored_columns: string[]; blank_rows?: number[] } {
   let rows: string[][];
   let text: string;
   if (typeof file_object === "string") text = file_object;
@@ -200,16 +202,27 @@ export function import_csv(store: Store, module_id: number,
       attributes.set(position, name);
     }
     else if (heading) {
-      throw new StoreError(`row 1: ${store.path(module_id)} has no attribute ${_repr(name)}`);
+      // "Export view to CSV" numbers the rows and gives no Level
+      const view = headings.includes("Number") && !headings.includes("Level")
+        ? '. A file from "Export view to CSV" is a report of the view and does not import; '
+          + 'to edit and bring back, use "Export CSV..."' : "";
+      throw new StoreError(`row 1: ${store.path(module_id)} has no attribute ${_repr(name)}${view}`);
     } else if (rows.slice(1).some((row) => position < row.length && row[position] !== "")) {
       throw new StoreError(`row 1: column ${position + 1} has values but no name`);
     }
   });
 
   const table: [number, string[]][] = []; // [row number, cells]
+  let blank: number[] = []; // blank rows not yet known to be inside the table
+  const blank_rows: number[] = [];
   rows.slice(1).forEach((row, index) => {
     const number = index + 2;
-    if (!row.some((c) => !_BLANK.test(c))) return;
+    if (!row.some((c) => !_BLANK.test(c))) {
+      blank.push(number);
+      return;
+    }
+    blank_rows.push(...blank);
+    blank = [];
     if (row.slice(headings.length).some((c) => !_BLANK.test(c))) {
       throw new StoreError(`row ${number}: more cells than the header has columns`);
     }
@@ -283,7 +296,7 @@ export function import_csv(store: Store, module_id: number,
       trail = _ancestry(store, obj);
     });
   });
-  return { created, updated, ignored_columns: ignored };
+  return { created, updated, ignored_columns: ignored, ...(blank_rows.length ? { blank_rows } : {}) };
 }
 
 function _ancestry(store: Store, obj: Obj | null): Obj[] {

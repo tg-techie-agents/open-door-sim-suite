@@ -1136,7 +1136,8 @@ export class Api {
     return { source: source.replace(/^﻿/, "") };
   }
 
-  op_run_dxl({ source, module = null, view = null, dry_run = false, confirm_yes = false, folder = null }: any): any {
+  op_run_dxl({ source, module = null, view = null, dry_run = false, confirm_yes = false, folder = null,
+    object = null }: any): any {
     this.op_dxl_close(); // a new run closes the boxes of the one before
     let open_module: string | null = null;
     if (module !== null && !this.store.is_baseline(int(module))) {
@@ -1146,7 +1147,8 @@ export class Api {
     this._scripted(reply, (out) => {
       const host = { interactive: true, progress: (p: Progress | null) => this.on_progress?.(p) };
       const result = run(source, this.store, out, open_module, ".",
-        () => Boolean(confirm_yes), Boolean(dry_run), false, this.disk, null, [], view, host);
+        () => Boolean(confirm_yes), Boolean(dry_run), false, this.disk, null, [], view, host,
+        object === null ? null : int(object));
       reply.unsaved = result.unsaved;
       this.dialogs = result.dialogs;
     }, dry_run ? folder : null);

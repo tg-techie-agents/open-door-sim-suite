@@ -1695,7 +1695,8 @@ function importCsvText(m, name, text) {
     const reply = await api("import_csv", { module: m.id, text });
     await refresh();
     const ignored = reply.ignored_columns.length ? `; columns not imported: ${reply.ignored_columns.join(", ")}` : "";
-    say(`Imported ${name}: ${reply.created} created, ${reply.updated} updated${ignored}`);
+    const blank = reply.blank_rows ? `; blank rows skipped: ${reply.blank_rows.join(", ")}` : "";
+    say(`Imported ${name}: ${reply.created} created, ${reply.updated} updated${ignored}${blank}`);
   });
 }
 
@@ -1930,7 +1931,7 @@ async function runDxl() {
     const module = current() ? S.moduleId : null;
     const dry = DXL.dry.checked || (S.readOnly && module !== null);
     const reply = await api("run_dxl", { source: DXL.source.value, module, view: module === null ? null : S.view || null,
-      dry_run: dry, confirm_yes: DXL.yes.checked });
+      object: module === null ? null : S.selected, dry_run: dry, confirm_yes: DXL.yes.checked });
     const parts = [reply.output ? h("div", {}, reply.output) : null];
     if (reply.error) {
       const { line, file, message } = reply.error;

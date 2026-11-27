@@ -213,6 +213,7 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
       const result: any = import_csv(store, formal(store, options.module[0]), read_text(file));
       say(`${result.created} created, ${result.updated} updated`);
       if (result.ignored_columns.length) say("columns not imported: " + result.ignored_columns.join(", "));
+      if (result.blank_rows) say("blank rows skipped: " + result.blank_rows.join(", "));
     } else if (kind === ".reqif" || kind === ".reqifz" || kind === ".xml") {
       const { import_reqif } = await import("./io/reqif.ts");
       import_reqif(store, options.into ?? "/", new Uint8Array(readFileSync(file)), file);

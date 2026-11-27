@@ -157,9 +157,14 @@ export function check(source: string, store: any, base_dir: string = ".", disk: 
 export function run(source: string, store: any, out: Out | null = null, open_module: string | null = null,
   base_dir: string = ".", ask: ((question: string) => boolean) | null = null, dry_run: boolean = false,
   any_file: boolean = false, disk: VirtualDisk | null = null, deadline: number | null = null,
-  include_dirs: string[] = [], view: string | null = null, host: DialogHost | null = null): RunResult {
+  include_dirs: string[] = [], view: string | null = null, host: DialogHost | null = null,
+  selected: number | null = null): RunResult {
   const [runtime, steps] = _prepare(source, store, out, open_module, base_dir, ask, any_file, disk, deadline,
     include_dirs, view);
+  // `current` is the object the person is on, by absolute number
+  if (selected !== null && runtime.module !== null && store.object(runtime.module, selected)) {
+    runtime._current.set(runtime.module, new Obj(runtime.module, selected));
+  }
 
   const dialogs = open_dialogs(runtime, host || { interactive: false });
   runtime.state.set("dry run", dry_run);
