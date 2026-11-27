@@ -3,6 +3,7 @@
 // Loaded before app.js; the menus it adds use app.js's own helpers.
 
 import * as boxes from "./dialogs.ts";
+import { decode_text, folder_link } from "./folder.ts";
 import { desktop, enter, entered, NOT_NATIVE } from "./host.ts";
 import { launcher } from "./launcher.ts";
 import type { Host } from "./host.ts";
@@ -227,11 +228,21 @@ async function perform(operation: string, args: any): Promise<any> {
     // Opening and closing modules is also written down; that is not the person's change.
     if (current_key() === fresh_demo() && operation !== "user_event" && operation !== "record_session") set_fresh_demo(null);
     await keep(reply.snapshot);
+    await folders.changed(reply.snapshot.files, (reply.result?.files ?? []).map((f: any) => f.name));
   }
   if (reply.not_saved) storage_problem(new Error(reply.not_saved));
   if (reply.error !== undefined) throw new Error(reply.error);
   return reply.result;
 }
+
+// A folder of the computer's, for scripts.
+const folders = folder_link({
+  key: () => current_key(),
+  put: async (name, files) => {
+    await (window as any).opendoorTransport("set_folder", { name, files });
+    (window as any).opendoorRedraw?.();
+  },
+});
 
 // One operation at a time.
 function in_turn<T>(work: () => Promise<T>): Promise<T> {
@@ -417,13 +428,7 @@ const host: Host = {
     if (new Uint8Array(bytes).includes(0)) {
       throw new Error(`${file.name} is not a text file. Only text is kept: save a spreadsheet as CSV first.`);
     }
-    let text: string;
-    try {
-      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-    } catch (e) {
-      text = new TextDecoder("windows-1252").decode(bytes);
-    }
-    await (window as any).opendoorTransport("add_file", { name: file.name, text });
+    await (window as any).opendoorTransport("add_file", { name: file.name, text: decode_text(bytes) });
   },
   remove_file: (path) => (window as any).opendoorTransport("remove_file", { path }),
   use: (path, text) => (window as any).opendoorUse(path, text),
@@ -455,6 +460,7 @@ document.addEventListener("DOMContentLoaded", () => {
   element("start").onclick = () => desk.start_menu([
     ...(innerWidth > 700 ? [["Tile windows", () => (window as any).opendoorTile()] as [string, () => unknown]] : []),
     ["Show desktop", () => (window as any).opendoorShell.showDesktop()],
+    ...folders.choices(),
     ["Start page", start],
   ], element("start"));
   // Only shell.js's ?open= goes past the start page: a shared link may carry any other query.

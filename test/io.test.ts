@@ -170,3 +170,23 @@ describe("CSV", () => {
     }
   });
 });
+
+describe("a baseline's date through a project file", () => {
+  test("is kept, and the same objects are dated after it", () => {
+    const first = example();
+    const second = empty();
+    load_project(second, dump_project(first));
+    const facts = (store: Store) => {
+      const data = JSON.parse(store.dumps());
+      return [...store.walk()].filter((i) => i.kind === "formal").map((item) => {
+        const baselines = store.baselines(item.id);
+        const last = baselines[baselines.length - 1].created_on;
+        const objects = data.modules.find((m: any) => m.id === item.id).objects;
+        return [item.name, baselines.map((b) => b.created_on),
+          objects.filter((o: any) => o.modified_on > last).map((o: any) => o.absno).sort((a: number, b: number) => a - b)];
+      });
+    };
+    assert.deepEqual(facts(second), facts(first));
+    assert.ok(facts(first).some((f) => (f[2] as number[]).length), "the example has edits after a baseline");
+  });
+});

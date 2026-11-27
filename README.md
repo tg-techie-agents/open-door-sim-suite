@@ -50,6 +50,12 @@ In the browser, the DXL window's Check button does what `check` does. Help,
 DXL functions lists what `functions` prints, and Help also opens the project
 file format and the guide for an AI assistant.
 
+In Chrome and Edge, Start, Use a folder from this computer gives scripts a
+folder you pick. Its text files are copied into the open database under the
+folder's name, so a script reaches them as `"name/file.csv"`. What a script
+writes there is written to the real folder, and nothing there is deleted or
+renamed. Safari and Firefox cannot do this.
+
 Open a database file takes a file saved from the page, a project file
 ([docs/project-format.md](docs/project-format.md)), or a database file the
 command line made. Save as project file writes the whole database as a project

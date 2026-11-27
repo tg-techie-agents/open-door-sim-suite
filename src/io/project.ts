@@ -793,6 +793,14 @@ function _load_content(store: Store, data: any): Map<string, number> {
     return new Obj(ids.get(where)!, number);
   };
 
+  // A state a baseline froze is dated as that baseline, so that the baseline keeps
+  // its date and a report comparing dates still sees what changed after it. The
+  // state as it is now has no date of its own.
+  const dated = <T>(state: any, work: () => T): T => {
+    const stamp = _get(state, "created_on");
+    return stamp === null || stamp === undefined ? work() : store.dated(stamp, work);
+  };
+
   // Each module's states, oldest first; the last is how it is now.
   const timelines = new Map<string, any[]>();
   for (const [where, spec] of specs) {
@@ -801,7 +809,8 @@ function _load_content(store: Store, data: any): Map<string, number> {
       _only(b, [...STATE_KEYS, "major", "minor", "suffix", "annotation", "created_on", "links"], `${where} baseline`);
     }
     timelines.set(where, [...frozen, spec]);
-    _apply(store, ids.get(where)!, timelines.get(where)![0], where);
+    const first = timelines.get(where)![0];
+    dated(first, () => _apply(store, ids.get(where)!, first, where));
   }
 
   // Baselines in the order they were made, each module then moving to its next state.
@@ -819,19 +828,21 @@ function _load_content(store: Store, data: any): Map<string, number> {
       }
     }
     const module = ids.get(where)!, frozen = timelines.get(where)![done.get(where)!];
-    _set_links(store, module, _iter(_get(frozen, "links", [])).map((l) => {
+    dated(frozen, () => _set_links(store, module, _iter(_get(frozen, "links", [])).map((l) => {
       const link_module = _key(l, "module"), number = _key(l, "from");
       return [link_module, number, obj(_key(l, "to"))] as [any, any, Obj];
-    }));
+    })));
     const last = store.baselines(module);
     const wanted_major = _get(frozen, "major", 0);
     if (!_numeric(wanted_major)) {
       throw new TypeError(`'>' not supported between instances of '${_kind(wanted_major)}' and 'int'`);
     }
     const major = Number(wanted_major) > (last.length ? last[last.length - 1].major : 0);
-    store.create_baseline(module, _column(_get(frozen, "annotation", "")), major, _column(_get(frozen, "suffix", "")));
+    dated(frozen, () =>
+      store.create_baseline(module, _column(_get(frozen, "annotation", "")), major, _column(_get(frozen, "suffix", ""))));
     done.set(where, done.get(where)! + 1);
-    _apply(store, module, timelines.get(where)![done.get(where)!], where);
+    const next = timelines.get(where)![done.get(where)!];
+    dated(next, () => _apply(store, module, next, where)); // the last, as it is now, is the module's spec
   }
 
   const wanted = new Map<number, _Wanted>([...ids.values()].map((module) => [module, new Map()]));

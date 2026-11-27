@@ -115,7 +115,9 @@ number in this module).
 
 ## Not kept by export and reload
 
-History, who created or changed things and when (including a baseline's author
-and date), and soft-deleted folders and modules. Suspect marks are restored link
-by link; in rare cases where several links share objects, one may come back
-marked on both ends instead of one.
+History, who created or changed things (including a baseline's author), and
+soft-deleted folders and modules. A baseline's date is kept. An object's own
+dates are not: on loading, what a baseline froze is dated as the first baseline
+that froze it, and what changed after the last one is dated at loading. Suspect
+marks are restored link by link; in rare cases where several links share objects,
+one may come back marked on both ends instead of one.

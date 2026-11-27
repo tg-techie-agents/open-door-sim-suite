@@ -1255,6 +1255,13 @@ export class Api {
     return { path };
   }
 
+  // The copies of a folder on the person's computer: all that is under its name.
+  op_set_folder({ name, files }: any): void {
+    const under = this.disk.cwd.replace(/\/$/, "") + "/" + String(name) + "/";
+    for (const path of [...this.disk.keys()]) if (path.startsWith(under)) this.disk.delete(path);
+    for (const [path, text] of files) this.disk.set(under + String(path), String(text));
+  }
+
   op_remove_file({ path }: any): void {
     if (!this.disk.delete(String(path))) throw new StoreError("there is no such file");
   }
