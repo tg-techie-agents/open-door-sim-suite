@@ -657,6 +657,7 @@ function downloadCsv(name, rows) {
   const filename = name.replace(/[^\w .()-]+/g, "_") + ".csv";
   // The marker lets Excel recognise UTF-8.
   download(filename, "﻿" + rows.map((r) => r.map(csvCell).join(",") + "\r\n").join(""), "text/csv");
+  exported(filename, rows.map((r) => r.map(csvCell).join(",") + "\r\n").join(""));
   say("Exported " + filename);
 }
 

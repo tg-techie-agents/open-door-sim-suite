@@ -251,10 +251,17 @@ details summary { cursor: pointer; font-weight: 600; padding: 3px 0; }
 #props .field > .name { display: block; font-weight: 600; }
 #props button.format { font-size: 11px; }
 
-/* The start screen covers the window. */
-dialog.start { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; padding: 24px 16px; overflow: auto; background: var(--face); color: inherit; }
-dialog.start .start-body { max-width: 520px; margin: 0 auto; }
-dialog.start .choices { display: grid; gap: 10px; }
-dialog.start .choices button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 14px; text-align: left; }
-dialog.start .choices button.primary { border-width: 2px; }
-dialog.start .choices button span { font-weight: normal; }
+/* The desktop covers the window. */
+#to-desktop { margin-left: auto; font-weight: 700; }
+dialog.desktop { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; padding: 20px 16px; overflow: auto; background: var(--face); color: inherit; }
+dialog.desktop .desk { max-width: 900px; margin: 0 auto; }
+dialog.desktop header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+dialog.desktop h1 { margin: 0; font-size: 22px; }
+dialog.desktop h2 { margin: 18px 0 8px; font-size: 15px; }
+dialog.desktop .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+dialog.desktop .tiles.drop { border: 2px dashed var(--edge); padding: 10px; }
+dialog.desktop .tile { display: flex; flex-direction: column; border: 1px solid var(--edge); background: #fff; min-width: 0; }
+dialog.desktop .tile.open { border: 2px solid #0a2a6b; }
+dialog.desktop .tile.new { border-style: dashed; background: transparent; }
+dialog.desktop .tile .main { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; text-align: left; border: 0; background: transparent; overflow-wrap: anywhere; }
+dialog.desktop .tile .actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-top: 1px solid var(--edge); }
