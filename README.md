@@ -300,7 +300,15 @@ It refuses rather than guesses, so some scripts DOORS accepts are refused:
   source module is closed.
 
 It may also accept something DOORS rejects. For example, it does not stop you
-from naming a variable after a built-in DOORS word.
+from naming a variable after a built-in DOORS word. And these are not confirmed
+against real DOORS:
+
+- `hardDelete` (or `delete`) on an object removes it even if it was not
+  `softDelete`d first. The manual states that requirement for modules and not
+  for objects; DOORS may still refuse it. To be safe, call `softDelete` first.
+- A first assignment to an undeclared name declares it, as DOORS does by
+  default. A DOORS site can turn this off, and there the script is refused.
+  `check` warns about each one by line; a run does not.
 
 As in DOORS, an incoming link is invisible until its source module is open.
 

@@ -1159,11 +1159,10 @@ export class Api {
   // Find the errors a run would find before running, without running.
   op_check({ source }: any): any {
     try {
-      check(source, this.store, ".", this.disk);
+      return { error: null, warnings: check(source, this.store, ".", this.disk) };
     } catch (e) {
-      return { error: _error(e) };
+      return { error: _error(e), warnings: [] };
     }
-    return { error: null };
   }
 
   // One thing a person did with a script's dialog box: its callbacks run now.

@@ -29,7 +29,10 @@ Copy this into your assistant's instructions (many tools read a file named
 - Skip deleted objects and table structure when counting requirements.
 - Put `pragma runLim, 0` at the top of long reports.
 - Settings go in one block at the top; reports only read.
-- Declare every variable. Do not name one after a built-in word.
+- Declare every variable, and clear every `check` warning. Do not name a variable
+  after a built-in word.
+- Call `softDelete` before `hardDelete`: whether DOORS needs that for an object
+  is not confirmed.
 - Dialog boxes: build the box, then `show` it as the last statement. Callbacks
   only run in the browser interface, so test them there.
 - Avoid a comment that ends in `-`: DXL treats it as joining the next line.

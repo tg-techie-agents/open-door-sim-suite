@@ -9,7 +9,7 @@ import { Obj, Store, StoreError } from "../store.ts";
 import type { Trigger, TriggerContext } from "../store.ts";
 import { RUNNING } from "./lib/triggers.ts";
 import type { Running } from "./lib/triggers.ts";
-import { Compiler, is_stack_overflow } from "./compiler.ts";
+import { Compiler, is_stack_overflow, type Warning } from "./compiler.ts";
 import type { Env, Fn } from "./compiler.ts";
 import { Files, OSError, VirtualDisk } from "./files.ts";
 import { DialogSession, open_dialogs, run_steps } from "./lib/dialogs.ts";
@@ -77,7 +77,7 @@ const stdout: Out = {
 
 function _prepare(source: string, store: any, out: Out | null, open_module: string | null, base_dir: string,
   ask: any, any_file: boolean = false, disk: VirtualDisk | null = null, deadline: number | null = null,
-  include_dirs: string[] = [], view: string | null = null): [Runtime, Fn[]] {
+  include_dirs: string[] = [], view: string | null = null): [Runtime, Fn[], Warning[]] {
   const runtime = new Runtime(build_library(), store, out || stdout, base_dir, ask,
     new Files(base_dir, true, any_file, disk, include_dirs));
   runtime.deadline = deadline;
@@ -97,7 +97,8 @@ function _prepare(source: string, store: any, out: Out | null, open_module: stri
     }
   }
   const compiler = new Compiler(runtime);
-  return [runtime, _compile(compiler, source)];
+  const steps = _compile(compiler, source);
+  return [runtime, steps, compiler.warnings];
 }
 
 /** All checks happen here, before any of the script runs. */
@@ -137,10 +138,10 @@ export function check_layout(source: string, store: any, base_dir: string = ".",
   _contained(() => new Parser(source).program().map((node) => compiler.statement(node)));
 }
 
-/** Type-check without running. Throws DxlError. */
+/** Type-check without running. Throws DxlError; returns what is allowed but doubtful. */
 export function check(source: string, store: any, base_dir: string = ".", disk: VirtualDisk | null = null,
-  include_dirs: string[] = []): void {
-  _prepare(source, store, null, null, base_dir, null, false, disk, null, include_dirs);
+  include_dirs: string[] = []): Warning[] {
+  return _prepare(source, store, null, null, base_dir, null, false, disk, null, include_dirs)[2];
 }
 
 /** Check and run a DXL script against `store`. Throws DxlError.

@@ -158,7 +158,9 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
     const included = include_dirs(options);
     for (const script of scripts) {
       try {
-        check(read_script(script), new Store(), dirname(resolve(script)), new RealDisk(process.cwd(), ROOT), included);
+        const warnings = check(read_script(script), new Store(), dirname(resolve(script)),
+          new RealDisk(process.cwd(), ROOT), included);
+        for (const w of warnings) note(printable(`${script}: ${w.file ? w.file + ", " : ""}line ${w.line}: warning: ${w.message}`));
         say(`${script}: ok`);
       } catch (e) {
         if (!(e instanceof DxlError)) throw e;

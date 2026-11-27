@@ -150,7 +150,11 @@ function number_of(raw: string, kind: "int" | "real"): number | null {
   return kind === "int" ? value + 0 : value;
 }
 
+/** Something Check accepts, as DOORS does by default, but the writer may not have meant. */
+export type Warning = { line: number; file: string | null; message: string };
+
 export class Compiler {
+  warnings: Warning[] = [];
   rt: Runtime;
   lib: Library;
   scopes: Array<Map<string, Var | Function[]>>;
@@ -1282,6 +1286,9 @@ export class Compiler {
         throw new DxlError(line, `cannot infer a type for ${name}; declare it`);
       }
       var_ = this.declare(line, name, [...kinds][0]);
+      this.warnings.push({ line, file: this.file, message: `${name} is not declared: this assignment declares it `
+        + `as ${var_.type}. If you meant another variable, check the spelling. DOORS allows this unless `
+        + "auto-declare is turned off there." });
     }
     if (!(var_ instanceof Var) || var_.type.endsWith("[]")) throw new DxlError(line, `cannot assign to ${name}`);
     if (var_.type === "string") this.not_kept(source);
