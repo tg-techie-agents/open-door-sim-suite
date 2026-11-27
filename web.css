@@ -250,3 +250,11 @@ details summary { cursor: pointer; font-weight: 600; padding: 3px 0; }
 #props .field { margin-bottom: 4px; }
 #props .field > .name { display: block; font-weight: 600; }
 #props button.format { font-size: 11px; }
+
+/* The start screen covers the window. */
+dialog.start { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; padding: 24px 16px; overflow: auto; background: var(--face); color: inherit; }
+dialog.start .start-body { max-width: 520px; margin: 0 auto; }
+dialog.start .choices { display: grid; gap: 10px; }
+dialog.start .choices button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 14px; text-align: left; }
+dialog.start .choices button.primary { border-width: 2px; }
+dialog.start .choices button span { font-weight: normal; }
