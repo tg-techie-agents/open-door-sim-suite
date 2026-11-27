@@ -1,0 +1,23 @@
+/* DXL colours behind the DXL window's source box (highlight.js). The textarea stays the
+   editor: its text is transparent, so the coloured copy shows through, and the caret stays. */
+.hl-host { position: relative; }
+.hl-layer { position: absolute; z-index: 0; overflow: hidden; pointer-events: none; margin: 0; padding: 0; border: 0; background: transparent; }
+.hl-code { position: absolute; top: 0; left: 0; min-width: 100%; white-space: pre; color: #000; }
+.hl-line { display: block; }
+.hl-cm { color: #5f6b73; }
+.hl-st, .hl-ch { color: #a31515; }
+.hl-nu { color: #098658; }
+.hl-kw { color: #0033b3; }
+.hl-ty { color: #267f99; }
+.hl-bi { color: #795e26; }
+.hl-pp { color: #af00db; }
+textarea.hl-input { position: relative; z-index: 1; background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: #000; }
+/* A forced-colours or print page shows the text with its own colours, so the copy is hidden. */
+@media (forced-colors: active) {
+  .hl-layer { display: none; }
+  textarea.hl-input { color: CanvasText; -webkit-text-fill-color: CanvasText; }
+}
+@media print {
+  .hl-layer { display: none; }
+  textarea.hl-input { color: #000; -webkit-text-fill-color: #000; }
+}

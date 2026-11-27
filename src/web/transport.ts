@@ -47,9 +47,9 @@ const shell: any = (() => {
   }
 })();
 
-// DOORS runs in windows over a desktop wherever the screen has room: the app's
-// own page, opened by itself, goes there.
-const leaving = Boolean(!shell && globalThis.document?.getElementById?.("main") && globalThis.window?.innerWidth > 700);
+// OpenDoor runs in windows over a desktop: the app's own page, opened by itself,
+// goes there.
+const leaving = Boolean(!shell && globalThis.document?.getElementById?.("main") && globalThis.window?.innerWidth > 0);
 if (leaving) location.replace("windows.html" + location.search);
 
 const element = (id: string) => document.getElementById(id)!;
@@ -59,7 +59,7 @@ function storage_problem(e: any): void {
   unsaved = true;
   const box = element("storage-problem");
   box.textContent = "Changes are NOT being saved in this browser: " + (e?.message || e?.name || e) // some have no message
-    + ". Use Desktop, Save to file.";
+    + ". On the desktop, use Save to file on the database.";
   box.hidden = false;
 }
 
@@ -130,7 +130,7 @@ async function boot(): Promise<void> {
     if (!saved) throw e;
     // Keep what is saved: never overwrite it with the example unasked.
     throw new Error(`The saved database could not be opened (${e.message}). `
-      + "It is on the Desktop, where you can delete it.");
+      + "It is on the desktop, where you can delete it.");
   }
 }
 
@@ -242,14 +242,13 @@ const send_event: boxes.Send = (session, event) => in_turn(() => perform("dxl_ev
 async function replace_database(key: string, snapshot: Snapshot | null, empty: string | null = null): Promise<void> {
   // windows.html has windows on the database being left: what is being typed in
   // them is saved to it first, and then they close.
-  const surface = !document.getElementById("main");
-  if (surface) await (window as any).opendoorFlush();
+  await (window as any).opendoorFlush();
   if (unsaved) {
     throw new Error("The open database has changes this browser could not save. Save it to a file first.");
   }
   boxes.clear(); // its script belongs to the database being left
   const demo = snapshot || empty !== null ? undefined : await free_name("demo").catch(() => "demo");
-  const windows: boolean = surface && (window as any).opendoorCloseWindows();
+  const windows: boolean = (window as any).opendoorCloseWindows();
   const switching = in_turn(async () => {
     const before = { last, kept, key: current_key() };
     try {
@@ -272,20 +271,8 @@ async function replace_database(key: string, snapshot: Snapshot | null, empty: s
   try {
     await switching;
   } finally {
-    if (surface) (window as any).opendoorSwitched(windows);
+    (window as any).opendoorSwitched(windows);
   }
-  if (surface) return;
-  resetView();
-  S.moduleId = S.data = S.selected = S.linkStart = S.clip = S.redline = null;
-  S.undo = []; // it names objects of the database that is gone
-  S.readOnly = false;
-  S.picked = 1;
-  S.expanded = new Set([1]);
-  await loadTree();
-  S.tree.children.forEach((c: any) => S.expanded.add(c.id));
-  renderTree();
-  render();
-  if (DXL.result) DXL.result.replaceChildren();
 }
 
 async function current_snapshot(): Promise<Snapshot> {
@@ -376,7 +363,7 @@ const host: Host = {
   use: (path, text) => (window as any).opendoorUse(path, text),
 };
 
-(window as any).opendoorDesktop = () => (shell ? shell.showDesktop() : desktop(host));
+(window as any).opendoorDesktop = () => shell?.showDesktop();
 
 // What windows.html needs of the engine it holds for its windows.
 (window as any).opendoorEngine = {
@@ -395,26 +382,15 @@ const host: Host = {
 
 document.addEventListener("DOMContentLoaded", () => {
   if (shell || leaving) return; // a window of windows.html has no desktop of its own
-  const surface = !document.getElementById("main");
-  // The start page leads to the tool: on windows.html it opens its windows.
-  const start = () => launcher(host, () => { enter(); (window as any).opendoorShow?.(); },
-    () => { if (!surface) desktop(host); });
-  (window as any).opendoorStart = start;
-  if (surface) {
-    (window as any).opendoorRedraw = desktop(host, element("surface"));
-    element("to-start").onclick = start;
-    if (!entered() && !location.search) start();
-    return;
-  }
-  if (location.hash === "#desktop") desktop(host);
-  else if (!entered()) start();
-  if (location.hash) history.replaceState(null, "", location.pathname);
-  element("menubar").append(h("button", { type: "button", id: "to-desktop", onclick: () => desktop(host) }, "Desktop"));
-  // The phone's way to the database tree.
-  element("menubar").prepend(h("button", { type: "button", id: "tree-toggle",
-    onclick: () => document.body.classList.toggle("tree-open") }, "Tree"));
-  element("explorer").addEventListener("click", (event) => {
-    const target = event.target as Element;
-    if (target.closest(".node") && !target.closest(".twisty")) document.body.classList.remove("tree-open");
-  });
+  const desk = desktop(host, element("surface"));
+  (window as any).opendoorRedraw = desk.draw;
+  // The start page leads to the tool: its windows open on the desktop.
+  const start = () => launcher(host, () => { enter(); (window as any).opendoorShow?.(); desk.draw(); });
+  element("start").onclick = () => desk.start_menu([
+    ...(innerWidth > 700 ? [["Tile windows", () => (window as any).opendoorTile()] as [string, () => unknown]] : []),
+    ["Show desktop", () => (window as any).opendoorShell.showDesktop()],
+    ["Start page", start],
+  ], element("start"));
+  // Only shell.js's ?open= goes past the start page: a shared link may carry any other query.
+  if (!entered() && !Number(new URLSearchParams(location.search).get("open"))) start();
 });

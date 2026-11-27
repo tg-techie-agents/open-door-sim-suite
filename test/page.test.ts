@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { read_file } from "./helpers.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SOURCES = ["base.js", "app.js", "richtext.js", "extras.js", "select.js", "menus.js", "api.ts", "transport.ts", "host.ts", "launcher.ts", "shell.js", "winchild.js", "windows.html", "worker.ts", "storage.ts", "index.html", "style.css", "web.css"];
+const SOURCES = ["base.js", "app.js", "richtext.js", "extras.js", "select.js", "menus.js", "highlight.js", "highlight.css", "api.ts", "transport.ts", "host.ts", "launcher.ts", "shell.js", "winchild.js", "windows.html", "worker.ts", "storage.ts", "index.html", "style.css", "web.css"];
 
 function put_global(name: string, value: unknown): () => void {
   const before = Object.getOwnPropertyDescriptor(globalThis, name);

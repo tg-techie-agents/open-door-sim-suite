@@ -29,14 +29,14 @@ Node.js.
 After the build, `start-mac.command` and `start-windows.bat` start it by
 double-click.
 
-The interface opens on a start page (what this is, and what to do next), then
-a small desktop, which DOORS does not have, with DOORS in windows
-on it (on a phone: one view, with the desktop behind a Desktop button). It holds the databases kept
-in this browser, a new empty one, a database file saved earlier, the demo, and
-the open database's files. Drag text files onto it for scripts to read; what
-scripts write appears there (dragging out to the computer works in Chromium
-browsers; elsewhere click to download). Show desktop uncovers it. A
-browser can discard what it keeps, so save to a file what matters. The demo is an invented hobby-greenhouse project
+The interface opens on a start page (what this is, and what to open), then a
+small desktop, which DOORS does not have, on a phone too. OpenDoor, the saved
+databases, and the open database's files are icons on it: double-click or tap
+opens one, drag moves it, and right-click or long press offers Open, Save to
+file, and Delete. Start, on the taskbar, makes a new database, opens a saved
+one, adds files, and leads back to the start page. Drag text files onto the
+desktop for scripts to read; what scripts write appears there. A browser can
+discard what it keeps, so save to a file what matters. The demo is an invented hobby-greenhouse project
 with planted faults: missing links, a "TBD", failed tests, and edits since the
 last baseline.
 
@@ -211,12 +211,14 @@ what it prints is this suite's own wording.
   hidden. No passwords, LDAP, or user details beyond names.
 - A view definition (`ViewDef`) keeps columns only: not a script's filter or
   sort, and a view is saved only with its other settings off.
+- The DXL window colours its source (comments, strings, numbers, and names the
+  engine knows). The colours are this suite's, not DOORS's.
 - In the interface, Help lists what is full, partial, and not offered, and DXL
   coverage name by name. Offered there means at least one form works.
 - Baseline sets, module copy, and history sessions work in part; a script stops
   where the manuals do not say what DOORS would do.
-- Windows (on screens wider than a phone) put the Database Explorer and several
-  modules side by side; undo is per window, and running a
+- The Database Explorer and each module have a window; on a phone each fills
+  the screen, and the taskbar switches between them. Undo is per window, and running a
   script closes another window's script dialog boxes. A second browser tab on
   the same database cannot save over the first. Drag and drop moves one object
   within its module (drag its ID); nothing is dragged between windows.
