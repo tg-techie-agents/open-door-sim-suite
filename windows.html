@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self'; frame-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenDoor</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="web.css">
+<link rel="stylesheet" href="shell.css">
+</head>
+<body>
+<div id="bar"><span>A practice tool, not DOORS, not affiliated with IBM. Made-up data only.</span>
+  <span id="tasks"></span>
+  <button type="button" id="tile">Tile side by side</button>
+  <button type="button" id="to-single">Single window</button>
+  <button type="button" id="to-desktop">Desktop</button></div>
+<div id="storage-problem" role="alert" hidden></div>
+<main id="desk"></main>
+<div id="menubar" hidden></div>
+<nav id="explorer" hidden></nav>
+<button id="stop" type="button" hidden>Stop script</button>
+<noscript>OpenDoor needs JavaScript.</noscript>
+<script src="transport.js"></script>
+<script src="shell.js"></script>
+</body>
+</html>
