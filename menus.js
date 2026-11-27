@@ -114,7 +114,7 @@ const FEATURES = {
   richText: ["Editing", "Bold, italic, underline, indent, bullets", "part", "strikethrough, subscript and superscript too, in String and Text values; no fonts, colours, numbered lists or tables"],
   tables: ["Editing", "Table: insert, rows, columns, properties", "no", NO_TABLES],
   forms: ["Editing", "Forms: new, run, edit, delete", "no", "forms are not built; edit in Properties"],
-  dragObjects: ["Editing", "Drag and drop objects or items", "no", "not built: use Cut and Paste, or Move", "mouse"],
+  dragObjects: ["Editing", "Drag and drop objects or items", "part", "drag one object by its ID onto another in the same module: before, after, or as its child. Not several objects, items in the explorer, links, or touch screens", "mouse"],
   multiSelect: ["Editing", "Select several objects", "part", "neighbours at one level with everything below them, widened to a common parent, including objects a filter hides (no Ctrl+click: a DOORS module window has none either). Move, delete, copy, cut, link and Edit attribute act on them; not printed or saved with a view", "Shift+click an object; Esc clears"],
   explorerSelect: ["Database", "Select several items", "no", "one item at a time in the database tree", "Ctrl or Shift click"],
   objectKeys: ["Editing", "Keyboard movement", "part", "up, down, parent (Left), first child (Right), first and last; the keys do not extend a selection", "arrow keys, Home, End"],
