@@ -31,6 +31,7 @@ export class Display {
   ancestors: boolean | null; // null: the script has not said
   sort: Array<[string, boolean]>; // [[attribute name, descending], ...]
   sorting: boolean;
+  explorer: boolean | null = null; // module explorer filtering; null: the script has not said
 
   constructor(marks: Map<string, boolean> = new Map(), filtered = false, filtering = false,
     ancestors: boolean | null = null, sort: Array<[string, boolean]> = [], sorting = false) {

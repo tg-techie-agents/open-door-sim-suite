@@ -13,7 +13,7 @@ import { DxlError, check, run } from "./dxl/index.ts";
 import { build_library } from "./dxl/lib/index.ts";
 import { export_module, import_csv } from "./io/csvio.ts";
 import { dump_project, load_project } from "./io/project.ts";
-import { RealDisk } from "./node/disk.ts";
+import { decode_script, RealDisk } from "./node/disk.ts";
 import { Store, StoreError } from "./store.ts";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -42,6 +42,12 @@ const note = (text: string) => process.stderr.write(text + "\n");
 const printable = (text: string) => text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "\ufffd");
 const say = (text: string) => process.stdout.write(printable(text) + "\n");
 const read_text = (path: string) => readFileSync(path, "utf8").replace(/^﻿/, "");
+
+function read_script(path: string): string {
+  const { text, ansi } = decode_script(readFileSync(path));
+  if (ansi) process.stderr.write(`(${basename(path)} is not UTF-8: read as Windows-1252)\n`);
+  return text.replace(/^\ufeff/, "");
+}
 
 function need(value: string | undefined, what: string): string {
   if (value === undefined) throw new Problem(`missing ${what} (see: node src/cli.ts help)`);
@@ -128,7 +134,7 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
     }
     let result;
     try {
-      result = run(read_text(script), store, { write: (s: string) => process.stdout.write(printable(s)) }, options.open, dirname(resolve(script)), ask,
+      result = run(read_script(script), store, { write: (s: string) => process.stdout.write(printable(s)) }, options.open, dirname(resolve(script)), ask,
         options["dry-run"] ?? false, options["any-file"] ?? false, disk, deadline(options.timeout),
         include_dirs(options));
     } catch (e) {
@@ -153,7 +159,7 @@ const commands: Record<string, (args: string[], options: Options) => void | Prom
     const included = include_dirs(options);
     for (const script of scripts) {
       try {
-        check(read_text(script), new Store(), dirname(resolve(script)), new RealDisk(process.cwd(), ROOT), included);
+        check(read_script(script), new Store(), dirname(resolve(script)), new RealDisk(process.cwd(), ROOT), included);
         say(`${script}: ok`);
       } catch (e) {
         if (!(e instanceof DxlError)) throw e;

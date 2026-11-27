@@ -10,6 +10,16 @@ import { OSError, VirtualDisk } from "../dxl/files.ts";
 
 const slashes = (path: string) => path.replaceAll("\\", "/");
 
+// Scripts saved on Windows are often not UTF-8. One that is not is read as
+// Windows-1252, the Western European code page.
+export function decode_script(bytes: Uint8Array): { text: string; ansi: boolean } {
+  try {
+    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), ansi: false };
+  } catch {
+    return { text: new TextDecoder("windows-1252").decode(bytes), ansi: true };
+  }
+}
+
 export class RealDisk extends VirtualDisk {
   constructor(cwd: string, program: string) {
     super(slashes(cwd));
@@ -54,6 +64,10 @@ export class RealDisk extends VirtualDisk {
 
   override get(path: string): string | undefined {
     return this.has(path) ? readFileSync(path, "utf8") : undefined;
+  }
+
+  override source(path: string): string | undefined {
+    return this.has(path) ? decode_script(readFileSync(path)).text : undefined;
   }
 
   override set(path: string, text: string): this {

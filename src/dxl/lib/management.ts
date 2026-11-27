@@ -23,6 +23,9 @@ export const SYSTEM: string[][] = [
   ["Description", "Text", "module"], ["Prefix", "String", "module"]];
 export const SYSTEM_NAMES = new Set<string>([...SYSTEM.map(([name]) => name),
   "Object Heading", "Object Short Text", "Object Text"]);
+// the system attributes nobody can edit
+const READ_ONLY = new Set(["Absolute Number", "Created By", "Created On", "Created Thru", "Last Modified By",
+  "Last Modified On"]);
 // object attributes that modules have too
 export const OF_BOTH = ["Created By", "Created On", "Last Modified By", "Last Modified On"];
 export const SYSTEM_TYPES = ["String", "Text", "Integer", "Real", "Date", "Boolean", "Username"];
@@ -362,6 +365,13 @@ export function register_attributes(lib: any): void {
   for (const [name, returns, read] of def_props) {
     lib.prop("AttrDef", name, returns, live_def(read));
   }
+  // Whether users can update the value, whatever access controls say. Which system
+  // attributes are read-only is Using DOORS' table of them.
+  lib.prop("AttrDef", "useraccess", "bool", live_def((_rt, d) => {
+    if (READ_ONLY.has(d.name)) return false;
+    if (d.dxl !== "") throw new Fault("useraccess of an attribute with DXL is not documented");
+    return true;
+  }));
   // `ad.dxl` is the code where a string is wanted, and whether there is any in a condition
   lib.prop("AttrDef", "dxl", "bool", need_def((rt, d) => d.dxl !== ""));
   lib.second_readings.set(key("AttrDef", "dxl"), ["string", need_def((rt, d) => d.dxl)]);
@@ -726,7 +736,40 @@ export function changed(record: any, value: string): string {
   return record.action === "modifyObject" ? value : "";
 }
 
+// `modified(o)`: changed since the module's last baseline. True where an attribute
+// edit is on record since then, false where nothing at all has touched the object.
+// Whether being created, moved, deleted or linked counts is not documented.
+function modified_since_baseline(rt: any, o: any): boolean {
+  const module_id = rt.obj(o).module_id;
+  if (rt.store.is_baseline(module_id)) throw new Fault("modified(Object) in a baseline is not documented");
+  const last = rt.store.baselines(module_id).at(-1);
+  if (!last) throw new Fault("what modified(Object) gives in a module with no baseline is not documented");
+  const module_history = history(rt, module_id);
+  const mark = module_history.findLast((h: any) =>
+    h.action === "createBaseline" && h.new === `${last.major}.${last.minor}`);
+  if (!mark) throw new Fault("modified(Object): the history does not show when the last baseline was made");
+  const since = history(rt, module_id, o.absno).filter((h: any) => h.seq > mark.seq);
+  if (since.some((h: any) => h.action === "createObject" || h.action === "copyObject")) {
+    throw new Fault("whether modified(Object) is true of an object created since the last baseline "
+      + "is not documented");
+  }
+  if (since.some((h: any) => h.action === "modifyObject")) return true;
+  if (since.length || rt.store._object_row(o).changed_seq > mark.seq) {
+    throw new Fault("this object has changed since the last baseline, but not by an attribute edit, and "
+      + "whether modified(Object) counts that is not documented");
+  }
+  const unseen = rt.store.attributes(module_id, "object").some((a: any) => !a.history || a.inherit)
+    || module_history.some((h: any) => h.seq > mark.seq
+      && ["modifyAttr", "deleteAttr", "modifyType", "deleteType"].includes(h.action));
+  if (unseen) {
+    throw new Fault("modified(Object): this object's values may have changed without a history record "
+      + "(an attribute without history or inherited, or a changed definition)");
+  }
+  return false;
+}
+
 export function register_history(lib: any): void {
+  lib.add("modified", ["Object"], "bool", modified_since_baseline);
   lib.type("History");
   lib.type("HistoryType", (rt: any, kind: string) => kind);
   for (const kind of HISTORY_TYPES) {
@@ -758,6 +801,10 @@ export function register_history(lib: any): void {
   for (const [name, returns, read] of props) {
     lib.prop("History", name, returns, (rt: any, h: any) => read(rt, rt.need(h, "History")));
   }
+
+  lib.prop("History", "sessionNo", "int", () => {
+    throw new Fault("History.sessionNo: how DOORS numbers it is not documented");
+  });
 
   lib.add("lastModifiedTime", ["Object"], "Date",
     (rt: any, o: any) => date(rt, rt.store.value(rt.obj(o), "Last Modified On")));

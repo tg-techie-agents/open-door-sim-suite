@@ -92,6 +92,11 @@ export class VirtualDisk extends Map<string, string> {
     this.cwd = normpath(cwd);
   }
 
+  /** A script's text (a real disk also takes one not saved as UTF-8). */
+  source(path: string): string | undefined {
+    return this.get(path);
+  }
+
   /** The path a name really leads to (a real disk follows symbolic links). */
   resolve(path: string): string {
     return path;
@@ -251,6 +256,14 @@ export class Files {
 
   exists(path: string): boolean {
     return this.disk.has(this.realpath(path)) || this.isdir(path);
+  }
+
+  /** A script to be included: as readText(), but see VirtualDisk.source. */
+  readSource(path: string): string {
+    const full = this.realpath(path);
+    const text = this.disk.source(full);
+    if (text === undefined) return this.readText(path); // says what is wrong
+    return text.startsWith("\ufeff") ? text.slice(1) : text;
   }
 
   /** The file's text, without a byte order mark. */

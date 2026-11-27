@@ -1685,6 +1685,18 @@ async function readUtf8(file) {
   }
 }
 
+// Scripts saved on Windows are often not UTF-8: such a one is read as
+// Windows-1252, and the page says so.
+async function openScript(file) {
+  const bytes = await file.arrayBuffer();
+  try {
+    setSource(new TextDecoder("utf-8", { fatal: true }).decode(bytes), file.name);
+  } catch (e) {
+    setSource(new TextDecoder("windows-1252").decode(bytes), file.name);
+    say(`${file.name} is not UTF-8 text: read as Windows-1252.`);
+  }
+}
+
 const exportCsv = () => act(async () => {
   const m = needModule();
   const save = async (columns) => {
@@ -1851,7 +1863,7 @@ function buildDxl() {
       DXL.run, h("label", { title: "Database changes are undone after the run. Files the script writes stay written." }, DXL.dry, " Try without saving"),
       h("label", { title: "What confirm() returns" }, DXL.yes, " Answer Yes to confirm()"),
       DXL.scripts,
-      h("button", { onclick: () => chooseFile(".dxl,.inc,.txt", async (f) => setSource(await readUtf8(f), f.name)) }, "Open file..."),
+      h("button", { onclick: () => chooseFile(".dxl,.inc,.txt", openScript) }, "Open file..."),
       h("button", { onclick: () => download(DXL.name || "script.dxl", DXL.source.value, "text/plain") }, "Save as..."),
       h("button", { onclick: () => { DXL.result.replaceChildren(); } }, "Clear output"),
       h("button", { onclick: () => act(window.opendoorScriptFiles), title: "Every file a script has written" }, "Written files...")),

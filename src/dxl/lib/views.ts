@@ -517,6 +517,20 @@ function register_display(lib: Library): void {
     return accepted_objects(rt, o.module_id, shown(rt, o.module_id)).some((x) => x.equals(o));
   });
 
+  // Outline mode displays only the objects that have a heading, and hides tables
+  // (of which there are none here).
+  lib.add("isOutline", ["Object"], "bool", (rt, o) => {
+    rt.obj(o);
+    const heading = rt.store.value(o, "Object Heading");
+    if (heading === "") return false;
+    if (heading.trim() === "" || !accepted_objects(rt, o.module_id, shown(rt, o.module_id))
+      .some((x) => x.equals(o))) {
+      throw new Fault("what isOutline() gives for an object that is not displayed, or whose heading is only "
+        + "spaces, is not documented");
+    }
+    return true;
+  });
+
   // Graphics mode, outlining and showing deleted objects are never on here.
   for (const name of ["graphics", "outlining"]) {
     lib.add(name, ["Module"], "bool", (rt, m) => { rt.opened_module(m); return false; });

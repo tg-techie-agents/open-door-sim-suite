@@ -321,18 +321,13 @@ export function register(lib: any): void {
 
   // These switch filtering in the module explorer alone. There is no explorer
   // here, so no object is affected.
-  const explorer = (rt: any): Map<number, boolean> => {
-    let on = rt.state.get("explorer filtering");
-    if (!on) rt.state.set("explorer filtering", on = new Map());
-    return on;
-  };
   for (const [name, on] of [["applyFiltering", true], ["unApplyFiltering", false]] as const) {
     lib.add(name, ["Module"], "void",
-      (rt: any, m: any) => { explorer(rt).set(rt.opened_module(m), on); });
+      (rt: any, m: any) => { display(rt, rt.opened_module(m)).explorer = on; });
   }
   lib.add("applyingFiltering", ["Module"], "bool", (rt: any, m: any) => {
-    const on = explorer(rt).get(rt.opened_module(m));
-    if (on === undefined) {
+    const on = display(rt, rt.opened_module(m)).explorer;
+    if (on === null) {
       throw new Fault("applyingFiltering: whether the module explorer starts with filtering on is not documented; "
         + "call applyFiltering or unApplyFiltering first");
     }

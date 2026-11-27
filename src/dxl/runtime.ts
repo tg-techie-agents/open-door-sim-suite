@@ -307,6 +307,8 @@ export class Runtime {
   obj(value: any): any {
     this.need(value, "Object");
     if (!this.opened.has(value.module_id)) throw new Fault("the Object's module is not open");
+    // a handle outlives a hardDelete or purge: nothing may be read through it
+    if (!this.store.object(value.module_id, value.absno)) throw new Fault("that object no longer exists");
     return value;
   }
 

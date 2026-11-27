@@ -1108,7 +1108,7 @@ export class Compiler {
     if (this.including.has(path)) throw new DxlError(line, `#include loop at ${name}`);
     let source: string;
     try {
-      source = this.rt.files.readText(path);
+      source = this.rt.files.readSource(path);
     } catch (e: any) {
       if (e instanceof OSError) throw new DxlError(line, `cannot include ${py_repr(name)}: ${e.strerror}`);
       throw e;
