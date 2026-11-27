@@ -23,6 +23,10 @@ export type Slider = { value: number; min: number; max: number };
 export type Menu = { title: string; entries: string[]; help: string[]; off_help: string[];
   sensitive: Callback; pick: Callback };
 export type Canvas = { width: number; height: number; ops: any[]; color: string; size: number; bold: boolean };
+/** `state` is what the sensitivity function last said; null before it is asked. */
+export type Tool = { type: number; width: number; tip: string; help: string; off_help: string; state: number | null;
+  items: string[]; chosen: number; typed: string };
+export type ToolBar = { name: string; show_name: boolean; tools: Tool[]; sensitive: Callback; pick: Callback };
 /** The menu a person has just opened: how each entry stands (0 grey, 1 usable, 2 ticked). */
 export type Popup = { element: number; menu: number; states: number[] };
 
@@ -146,12 +150,57 @@ function shade(table: Array<[string, string]>, n: number): string {
   return table[n][1];
 }
 
+const [BUTTON, TOGGLE, RADIO, COMBO, SPACER, EDITABLE] = [0, 1, 2, 3, 4, 5];
+const TOOL_TYPES = [["toolButton", BUTTON], ["toolToggle", TOGGLE], ["toolRadio", RADIO], ["toolCombo", COMBO],
+  ["toolSpacer", SPACER], ["toolEditableCombo", EDITABLE]] as const;
+const is_combo = (tool: Tool) => tool.type === COMBO || tool.type === EDITABLE;
+
+/** Ask the script how each tool of a bar stands. */
+function ask_tools(rt: any, element: Element): void {
+  const bar = element.toolbar!, dialogs = dialogs_of(rt)!, before = dialogs.callback;
+  dialogs.callback = "DBE";
+  try {
+    bar.tools.forEach((tool, i) => {
+      if (tool.type === SPACER) return;
+      const answer = call_back(rt, bar.sensitive, [i]);
+      if (typeof answer !== "number") throw new Fault(`the callback ${bar.sensitive.target.name} returned nothing`);
+      tool.state = answer;
+    });
+  } finally {
+    dialogs.callback = before;
+  }
+}
+
+/** A person pressed a tool or picked from its combo. */
+export function use_tool(rt: any, element: Element, event: { entry?: number | null; row?: number | null;
+  text?: string | null }): void {
+  const bar = element.toolbar;
+  const at = event.entry ?? -1;
+  const tool = bar?.tools[at];
+  if (!bar || !tool || tool.type === SPACER || tool.state === null || tool.state === 0 || tool.state === 3) return;
+  if (is_combo(tool)) {
+    const row = event.row ?? -1;
+    if (Number.isInteger(row) && row >= 0 && row < tool.items.length) {
+      tool.chosen = row;
+      tool.typed = "";
+    } else if (tool.type === EDITABLE && typeof event.text === "string") {
+      tool.chosen = -1;
+      tool.typed = event.text;
+    } else return;
+  }
+  call_back(rt, bar.pick, [at]);
+}
+
 /** Draw every canvas of the boxes again, as DOORS does whenever one is uncovered:
  * here, when a box is shown and after each thing the person does. */
 export function paint(rt: any, dialogs: Dialogs, boxes: Box[]): void {
   const before = dialogs.callback;
   for (const box of boxes) {
     for (const element of box.elements) {
+      // the first time a tool bar is on screen
+      if (element.toolbar && box.on_screen && element.toolbar.tools.some((t) => t.type !== SPACER && t.state === null)) {
+        ask_tools(rt, element);
+      }
       const canvas = element.canvas;
       if (!canvas || !box.on_screen || element.hidden) continue;
       canvas.ops = [];
@@ -197,6 +246,10 @@ export function part_spec(e: Element): any {
   if (e.status) out.status = { ends: [...e.status.ends], cells: [...e.status.cells], full: e.status.full };
   if (e.slider) out.slider = { ...e.slider };
   if (e.pair) out.pair = [e.pair[0].id, e.pair[1].id];
+  if (e.toolbar) {
+    out.toolbar = { name: e.toolbar.show_name ? e.toolbar.name : "",
+      tools: e.toolbar.tools.map((t) => ({ ...t, items: [...t.items] })) };
+  }
   if (e.canvas) out.canvas = { width: e.canvas.width, height: e.canvas.height, ops: [...e.canvas.ops] };
   return out;
 }
@@ -209,6 +262,9 @@ export function part_text(e: Element, name: string): string[] | null {
   if (e.kind === "slider") return [`${name.replace(/:\s*$/, "")}: ${e.slider!.value} (slider ${e.slider!.min} to ${e.slider!.max})`];
   if (e.kind === "canvas") {
     return [`canvas ${e.canvas!.width}x${e.canvas!.height}${menu_text(e)} (drawn only in the browser interface)`];
+  }
+  if (e.kind === "toolBar") {
+    return [`tool bar: ${e.toolbar!.tools.map((t) => (t.type === SPACER ? " " : `<${t.tip || "tool"}>`)).join(" ")}`];
   }
   if (e.kind === "statusBar") return [`status: ${e.status!.full || e.status!.cells.join(" | ")}`];
   if (e.kind === "menuBar") {
@@ -402,6 +458,163 @@ export function register_parts(lib: Library): void {
   add("addMenu", [...head, "int", ...tail], "void", (rt, v, title, _m, entries, _ms, _hots, help, off, n, sensitive, pick) =>
     add_menu(rt, v, title, entries, help, off, n, sensitive, pick));
 
+  // -- windows: parent, position and size ----------------------------------------
+
+  // which window a box belongs to changes nothing here
+  add("setParent", ["DB", "Module"], "void", (rt, b) => { box_of(rt, b); });
+  add("setParent", ["DB", "DB"], "void", (rt, b, other) => { box_of(rt, b); box_of(rt, other); });
+  add("setParent", ["DBE", "DBE"], "void", (rt, child, parent) => {
+    const inner = element_of(rt, child), outer = element_of(rt, parent);
+    if (outer.kind !== "frame") throw new Fault("the only element that can be the parent of another is a frame");
+    if (inner.box !== outer.box) throw new Fault("the elements are on different dialog boxes");
+    put_inside(inner, outer);
+  });
+  const pixels = (w: number, h: number) => {
+    if (!(w > 0 && w <= 4000 && h > 0 && h <= 4000)) {
+      throw new Fault(`a size of ${w} by ${h} pixels is not offered (1 to 4000 each way)`);
+    }
+  };
+  const place = (rt: any, b: any, change: NonNullable<Box["geometry"]>) => {
+    const box = box_of(rt, b);
+    box.geometry = { ...box.geometry, ...change };
+  };
+  add("setPos", ["DB", "int", "int"], "void", (rt, b, x, y) => {
+    if (!(Math.abs(x) <= 10000 && Math.abs(y) <= 10000)) throw new Fault(`(${x}, ${y}) is not a place on a screen`);
+    place(rt, b, { x, y, centred: false });
+  });
+  add("setSize", ["DB", "int", "int"], "void", (rt, b, width, height) => {
+    pixels(width, height);
+    place(rt, b, { width, height });
+  });
+  add("setCenteredSize", ["DB", "int", "int"], "void", (rt, b, width, height) => {
+    pixels(width, height);
+    if (!box_of(rt, b).realized) throw new Fault("setCenteredSize comes after realize (or show) of the box");
+    place(rt, b, { width, height, centred: true });
+  });
+
+  // -- tool bars ---------------------------------------------------------------
+
+  lib.type("ToolType");
+  for (const [name, value] of TOOL_TYPES) constant(name, value, "ToolType");
+  constant("ddbInvisible", 3, "Sensitivity");
+  const tool_bar = (rt: any, b: any, name: string | null, types: any[], params: any[], tips: any[], helps: any[],
+    off_helps: any[], count: number | null, sensitive: Callback, pick: Callback, new_row: boolean, show_name: boolean) => {
+    const arrays = [types, params, tips, helps, off_helps];
+    const n = count ?? types.length;
+    if (count === null && arrays.some((a) => a.length !== n)) {
+      throw new Fault("without a number of tools, the arrays of a tool bar must all be the same size");
+    }
+    if (n < 1 || n > 100 || arrays.some((a) => n > a.length)) throw new Fault(`a tool bar cannot have ${n} tools here`);
+    const need = (a: any[], i: number, what: string) => {
+      if (a[i] === undefined || a[i] === null) throw new Fault(`tool ${i} of the tool bar has no ${what}`);
+      return a[i];
+    };
+    const tools: Tool[] = [];
+    for (let i = 0; i < n; i++) {
+      const type = need(types, i, "type") as number;
+      const spacer = type === SPACER;
+      const combo = type === COMBO || type === EDITABLE;
+      tools.push({ type, width: combo ? need(params, i, "width") : 0, tip: spacer ? "" : need(tips, i, "tool tip"),
+        help: helps[i] ?? "", off_help: off_helps[i] ?? "", state: null, items: [], chosen: -1, typed: "" });
+    }
+    const e = add_element(rt, b, "toolBar", "");
+    e.toolbar = { name: name ?? "", show_name: show_name, tools, sensitive, pick };
+    if (name !== null) e.place = new_row ? "below" : "beside";
+    return e;
+  };
+  const arrays = ["ToolType[]", "int[]", "string[]", "string[]", "string[]"];
+  const calls = ["Sensitivity(int)", "void(int)"];
+  const named = ["DB", "string", "Sensitivity()"];
+  add("toolBar", ["DB", ...arrays, ...calls], "DBE", (rt, b, t, p, tip, h, off, sensitive, pick) =>
+    tool_bar(rt, b, null, t, p, tip, h, off, null, sensitive, pick, true, false));
+  add("toolBar", ["DB", ...arrays, "int", ...calls], "DBE", (rt, b, t, p, tip, h, off, n, sensitive, pick) =>
+    tool_bar(rt, b, null, t, p, tip, h, off, n, sensitive, pick, true, false));
+  // how a named bar shows in the container's right-click menu does not arise here
+  add("toolBar", [...named, ...arrays, ...calls, "bool", "bool"], "DBE",
+    (rt, b, name, _map, t, p, tip, h, off, sensitive, pick, row, show) =>
+      tool_bar(rt, b, name ?? "", t, p, tip, h, off, null, sensitive, pick, row, show));
+  add("toolBar", [...named, ...arrays, "int", ...calls, "bool", "bool"], "DBE",
+    (rt, b, name, _map, t, p, tip, h, off, n, sensitive, pick, row, show) =>
+      tool_bar(rt, b, name ?? "", t, p, tip, h, off, n, sensitive, pick, row, show));
+  add("updateToolBars", ["DB"], "void", (rt, b) => {
+    const box = box_of(rt, b);
+    for (const e of box.elements) if (e.toolbar && box.on_screen && dialogs_of(rt)!.host.interactive) ask_tools(rt, e);
+  });
+  const bar_of = (rt: any, v: any): Element => element_of(rt, v, "toolBar");
+  const combo = (rt: any, v: any, index: number): Tool => {
+    const tool = bar_of(rt, v).toolbar!.tools[index];
+    if (!tool || !is_combo(tool)) throw new Fault(`tool ${index} of the tool bar is not a combo`);
+    return tool;
+  };
+  const item = (tool: Tool, at: number) => {
+    if (!(at >= 0 && at < tool.items.length)) throw new Fault(`the combo has no item ${at}`);
+    return at;
+  };
+  const insert_item = (tool: Tool, at: number, value: string) => {
+    if (!(at >= -1 && at <= tool.items.length)) throw new Fault(`${at} is not a position in the combo`);
+    if (tool.items.length >= 20000) throw new Fault("more than 20000 items");
+    const where = at < 0 ? tool.items.length : at;
+    tool.items.splice(where, 0, value ?? "");
+    if (tool.chosen >= where) tool.chosen++;
+  };
+  add("toolBarComboAdd", ["DBE", "int", "string"], "void", (rt, v, i, value) => insert_item(combo(rt, v, i), -1, value));
+  add("toolBarComboInsert", ["DBE", "int", "int", "string"], "void",
+    (rt, v, i, at, value) => insert_item(combo(rt, v, i), at, value));
+  add("toolBarComboDelete", ["DBE", "int", "int"], "void", (rt, v, i, at) => {
+    const tool = combo(rt, v, i);
+    tool.items.splice(item(tool, at), 1);
+    if (tool.chosen === at) tool.chosen = -1;
+    else if (tool.chosen > at) tool.chosen--;
+  });
+  add("toolBarComboEmpty", ["DBE", "int"], "void", (rt, v, i) => {
+    Object.assign(combo(rt, v, i), { items: [], chosen: -1, typed: "" });
+  });
+  add("toolBarComboCount", ["DBE", "int"], "int", (rt, v, i) => combo(rt, v, i).items.length);
+  add("toolBarComboGetItem", ["DBE", "int", "int"], "string", (rt, v, i, at) => {
+    const tool = combo(rt, v, i);
+    return tool.items[item(tool, at)];
+  });
+  const selection = (rt: any, v: any, i: number): Tool => {
+    const tool = combo(rt, v, i);
+    if (tool.chosen < 0 && !tool.typed) {
+      throw new Fault("what a tool bar combo gives when nothing is selected is not documented");
+    }
+    return tool;
+  };
+  add("toolBarComboGetSelection", ["DBE", "int"], "string", (rt, v, i) => {
+    const tool = selection(rt, v, i);
+    return tool.chosen < 0 ? tool.typed : tool.items[tool.chosen];
+  });
+  add("toolBarComboGetSelection", ["DBE", "int"], "int", (rt, v, i) => {
+    const tool = selection(rt, v, i);
+    if (tool.chosen < 0) throw new Fault("the index of text typed into a combo is not documented");
+    return tool.chosen;
+  });
+  add("toolBarComboSelect", ["DBE", "int", "int"], "void", (rt, v, i, at) => {
+    const tool = combo(rt, v, i);
+    Object.assign(tool, { chosen: item(tool, at), typed: "" });
+  });
+  add("toolBarComboSelect", ["DBE", "int", "string"], "void", (rt, v, i, value) => {
+    const tool = combo(rt, v, i), at = tool.items.indexOf(value);
+    if (at < 0) throw new Fault(`the combo has no item '${value}'`);
+    Object.assign(tool, { chosen: at, typed: "" });
+  });
+  // only a named bar sits in the container whose bars can be hidden
+  const hosted = (rt: any, v: any): Element => {
+    const e = bar_of(rt, v);
+    if (!e.toolbar!.name) throw new Fault("this applies only to a tool bar created with a name");
+    return e;
+  };
+  const by_name = (rt: any, b: any, name: string): Element => {
+    const found = box_of(rt, b).elements.find((e) => e.toolbar && e.toolbar.name === name);
+    if (!found || !name) throw new Fault(`the box has no tool bar named '${name}'`);
+    return found;
+  };
+  add("toolBarVisible", ["DBE"], "bool", (rt, v) => !hosted(rt, v).hidden);
+  add("toolBarVisible", ["DB", "string"], "bool", (rt, b, name) => !by_name(rt, b, name).hidden);
+  add("toolBarShow", ["DBE", "bool"], "void", (rt, v, on) => { hosted(rt, v).hidden = !on; });
+  add("toolBarShow", ["DB", "string", "bool"], "void", (rt, b, name, on) => { by_name(rt, b, name).hidden = !on; });
+
   // -- canvases ----------------------------------------------------------------
 
   add("canvas", ["DB", "int", "int", "void(DBE)"], "DBE", (rt, b, width, height, repaint) => {
@@ -443,6 +656,19 @@ export function register_parts(lib: Library): void {
   };
   add("draw", ["DBE", "int", "int", "string"], "void", (rt, v, x, y, s) => text(rt, v, x, y, s, 0));
   add("drawAngle", ["DBE", "int", "int", "string", "real"], "void", text);
+  // pairs of x and y, drawn as a closed outline
+  add("polygon", ["DBE", "int[]"], "void", (rt, v, coords: any[]) => {
+    const [, canvas] = drawing(rt, v);
+    if (coords.length < 6 || coords.length % 2) {
+      throw new Fault(`polygon takes pairs of co-ordinates, at least three: the array has ${coords.length} elements`);
+    }
+    for (let i = 0; i < coords.length; i++) {
+      if (coords[i] === undefined || coords[i] === null) {
+        throw new Fault(`polygon: array element ${i} has no value, and what is drawn for it is not documented`);
+      }
+    }
+    put(canvas, ["polygon", canvas.color, ...coords]);
+  });
   // clockwise from three o'clock, as the manual has it; y grows downwards
   add("polarLine", ["DBE", "int", "int", "int", "int"], "void", (rt, v, x, y, length, degrees) => {
     const [, canvas] = drawing(rt, v), a = degrees * Math.PI / 180;

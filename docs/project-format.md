@@ -54,6 +54,12 @@ misspelling cannot silently drop content.
   it, and calculated values are not written to the file.
 - Objects: `heading`, `short_text`, and `text` are those three attributes; others
   go in `values`. A multi-valued attribute takes a list.
+- `rich`: formatted values, as `{"Object Text": "The unit {\\b shall} ..."}`.
+  Give an attribute here or as plain text, not both. Only `String` and `Text`
+  attributes can be formatted. The markup is `\b`, `\i`, `\ul`, `\strike`,
+  `\sub`, `\super` in braces, a line break between paragraphs, and `\pard`,
+  `\liN` (indent, in twips) and `{\*\pn\pnlvlblt}` (bullet) at the start of a
+  paragraph.
 - `number` is the absolute number. It may be left out; such objects are numbered
   after the highest one given.
 - `deleted`: soft-deleted. Its children must be deleted too.

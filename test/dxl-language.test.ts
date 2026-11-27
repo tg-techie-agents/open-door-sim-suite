@@ -1,5 +1,5 @@
 // ++ and --, appends, forward declarations, Array, versions, enumeration
-// options, code pages, plain rich text and #include.
+// options, code pages, rich text of plain values and #include.
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { check, DxlError, run, VirtualDisk } from "../src/dxl/index.ts";
@@ -235,12 +235,11 @@ describe("rich text of plain values", () => {
   });
 
   test("anything it cannot be certain of stops", () => {
-    for (const value of ["a {b}", "a\\\\b", "two\\nlines", "café"]) {
-      refused(`${EDIT}Object o = object 2\no."Object Text" = "${value}"\nprint richText(o."Object Text")`,
-        /plain ASCII/, 5);
-    }
-    refused(`${EDIT}object(2)."Object Text" = richText "{\\\\b x}"`, /incorrect/, 3);
-    refused("RichText rt", /rich text decomposition/, 1);
+    refused(`${EDIT}Object o = object 2\no."Object Text" = "5 \u2126"\nprint richText(o."Object Text")`,
+      /not verified/, 5);
+    refused(`${READ}print richText(object(2)."Object Text", true)`, /not supported/, 3);
+    refused(`print exportRTFString "x"`, /does not offer/, 1);
+    refused(`print richTextFragment "x"`, /does not offer/, 1);
   });
 });
 

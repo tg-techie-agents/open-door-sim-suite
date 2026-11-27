@@ -20,7 +20,7 @@
 <div id="body">
   <nav id="explorer" aria-label="Database explorer"></nav>
   <nav id="outline" hidden aria-label="Module Explorer"></nav>
-  <main id="main"></main>
+  <main id="main"><p class="empty" role="status">Loading...</p></main>
   <aside id="props" hidden aria-label="Object properties"></aside>
 </div>
 <section id="dxl" hidden aria-label="DXL interaction"></section>
@@ -28,6 +28,7 @@
 <button id="stop" type="button" hidden>Stop script</button>
 <noscript>OpenDoor needs JavaScript.</noscript>
 <script src="transport.js"></script>
+<script src="richtext.js"></script>
 <script src="app.js"></script>
 <script src="trace.js"></script>
 <script src="extras.js"></script>

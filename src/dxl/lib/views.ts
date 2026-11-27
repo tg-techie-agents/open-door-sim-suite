@@ -102,7 +102,7 @@ function current_ref(rt: Runtime, ref: any): ColumnRef {
   return ref;
 }
 
-function column_of(rt: Runtime, ref: any): ViewColumn {
+export function column_of(rt: Runtime, ref: any): ViewColumn {
   const found = current_ref(rt, ref);
   if (found.column === null) {
     throw new Fault(`there is no column ${found.index}: the view has ${found.window.columns.length}, `
@@ -384,6 +384,11 @@ export function save_view_in(rt: Runtime, target: any, view: any, settings: View
         + "turn filtering and sorting off, or save(view, viewDef) saying useFiltering and useSorting");
     }
   } else {
+    const kept = Object.entries(settings).find(([flag, on]) =>
+      on && !["useColumns", "useFiltering", "useSorting"].includes(flag));
+    if (kept) {
+      throw new Fault(`${kept[0]}: this setting cannot be kept in a view here; write ${kept[0]}(viewDef, false)`);
+    }
     if (settings.useColumns !== true) {
       throw new Fault("only a view definition with useColumns true can be saved here");
     }
@@ -426,7 +431,19 @@ function current_view(rt: Runtime, module_id: any): string {
 }
 
 // canRead(module "...", view "...") and the rest.
-function view_right(changes: boolean) {
+// the answer from a view's own access list, or null while it has none
+function own_view_right(rt: Runtime, module_id: number, name: string, call: string): boolean | null {
+  const entries = rt.store.views(module_id).get(name)?.access;
+  if (!entries) return null;
+  const answer = rt.store._decide(entries, RIGHT_ASKED[call]);
+  if (answer === "unknown") {
+    throw new Fault(`${call}: the answer depends on which of the named groups ${rt.store.user} belongs to`);
+  }
+  return answer === "yes";
+}
+
+function view_right(call: string) {
+  const changes = call !== "canRead";
   return (rt: Runtime, module_id: any, view: any): boolean => {
     rt.need(module_id, "ModName_");
     view_in(rt, module_id, view);
@@ -434,7 +451,7 @@ function view_right(changes: boolean) {
     if (!rt.store.views(module_id).has(view.name)) {
       throw new Fault(`there is no saved view ${_repr(view.name)}, and what DOORS then answers is not documented`);
     }
-    return true;
+    return own_view_right(rt, module_id, view.name, call) ?? true;
   };
 }
 
@@ -463,14 +480,13 @@ function register_view_functions(lib: Library): void {
   // saved views only; whether DOORS also lists the Standard view is not verified
   lib.loop("ViewNames_", "string", (rt, m: number) => [...rt.store.views(owner_of(rt, m)).keys()]);
 
-  lib.add("canRead", ["ModName_", "View"], "bool", view_right(false));
-  for (const name of ["canModify", "canWrite", "canDelete", "canControl"]) {
-    lib.add(name, ["ModName_", "View"], "bool", view_right(true));
+  for (const name of ["canRead", "canModify", "canWrite", "canDelete", "canControl"]) {
+    lib.add(name, ["ModName_", "View"], "bool", view_right(name));
   }
   lib.add("canCreate", ["ModName_", "View"], "bool", (rt, m, v) => {
     view_in(rt, rt.need(m, "ModName_"), v);
     if (v.name === STANDARD_VIEW) throw new Fault("canCreate of the Standard view is not documented");
-    return true;
+    return own_view_right(rt, m, v.name, "canCreate") ?? true;
   });
 }
 

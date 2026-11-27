@@ -253,8 +253,11 @@ export function import_csv(store: Store, module_id: number,
           let changed = false;
           for (const [name, value] of values) {
             const old = store.value(obj, name);
-            // stores nothing if it is the same; an inherited value left as it was stays inherited
-            if (value !== old || !store.attribute(module_id, name)?.inherit) store.set_value(obj, name, value);
+            // stores nothing if it is the same; an inherited value left as it was stays inherited, and a
+            // formatted one keeps its formatting, which CSV does not carry
+            if (value !== old || !(store.attribute(module_id, name)?.inherit || store.formatting(obj, name) !== null)) {
+              store.set_value(obj, name, value);
+            }
             changed = changed || store.value(obj, name) !== old;
           }
           updated += Number(changed);

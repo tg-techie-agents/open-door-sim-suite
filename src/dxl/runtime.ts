@@ -161,6 +161,12 @@ export class AttrRef {
   set(text: string): void {
     this.rt.lib.attrs.get(this.owner_type)![1](this.rt, this.owner, this.name, text);
   }
+  /** `owner."name" = richText ...` */
+  set_rich(markup: string): void {
+    const set = this.rt.lib.rich_attrs.get(this.owner_type);
+    if (!set) throw new Fault("rich text in this kind of attribute is not supported here");
+    set(this.rt, this.owner, this.name, markup);
+  }
   /** `owner."name" = (string null)` */
   reset(): void {
     const reset = this.rt.lib.resets.get(this.owner_type);
@@ -256,14 +262,31 @@ export class Runtime {
 
   set object(value: any) {
     if (value === null) this._current.delete(this.module);
-    else this._current.set(value.module_id, value);
+    else this.make_current(value);
+  }
+
+  make_current(obj: any): void {
+    this.store.refuse_triggered?.({ module: obj.module_id, absno: obj.absno }, "object", "sync",
+      "making an object current from a script");
+    this._current.set(obj.module_id, obj);
   }
 
   // -- open modules ----------------------------------------------------
 
   /** Open a formal module. A stronger mode wins over a weaker one. */
   open(module_id: number, mode: string = "read"): number {
-    if (!this.opened.has(module_id)) this.displays.delete(module_id);
+    if (this.state.get("module locks")?.has(module_id)) {
+      throw new Fault("what opening a module the script has locked does is not documented; unlock it first");
+    }
+    if (!this.opened.has(module_id)) {
+      this.store.refuse_triggered?.({ module: module_id }, "module", "open", "a script opening a module");
+      // which object is then current, and whether that is a change of it, is the same question
+      for (const { row } of this.store.triggers_for?.(module_id, "object", "sync") ?? []) {
+        this.store.refuse_triggered({ module: module_id, absno: row.absno ?? null }, "object", "sync",
+          "a script opening a module");
+      }
+      this.displays.delete(module_id);
+    }
     const held = this.opened.get(module_id);
     if (held === undefined || held === "read") this.opened.set(module_id, mode);
     return module_id;

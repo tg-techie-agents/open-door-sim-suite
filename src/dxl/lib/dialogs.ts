@@ -15,13 +15,16 @@
 //
 // What the manual does not settle is refused where it is met rather than guessed.
 
+import { is_formatted, parse, plain_of, RichError } from "../../rich.ts";
+import type { Doc } from "../../rich.ts";
 import { carry_out } from "./pending.ts";
 import type { Library } from "../registry.ts";
 import { Callback, Fault, Halt } from "../runtime.ts";
 import { confirm } from "./core.ts";
 import { call_back, choose_path, empty_tree, follow, menu_text, paint, part_spec, part_text, put_inside,
-  register_parts } from "./dialog-parts.ts";
-import type { Canvas, Menu, Popup, Slider, Status, Tree } from "./dialog-parts.ts";
+  register_parts, use_tool } from "./dialog-parts.ts";
+import { Buffer } from "./text.ts";
+import type { Canvas, Menu, Popup, Slider, Status, ToolBar, Tree } from "./dialog-parts.ts";
 
 const STATE = "dialogs"; // the key in rt.state
 const MAX_ROWS = 20000;
@@ -34,7 +37,12 @@ export type DialogHost = { interactive: boolean; progress?: (progress: Progress 
 
 export type Kind = "label" | "separator" | "field" | "text" | "fileName" | "toggle" | "radioBox" | "checkBox"
   | "choice" | "list" | "multiList" | "listView" | "button"
-  | "frame" | "tab" | "splitter" | "treeView" | "slider" | "statusBar" | "menuBar" | "canvas";
+  | "frame" | "tab" | "splitter" | "treeView" | "slider" | "statusBar" | "menuBar" | "canvas"
+  | "richField" | "richText" | "toolBar";
+
+/** The elements a person types into. */
+const TYPED: Kind[] = ["field", "text", "fileName", "richField", "richText"];
+const RICH: Kind[] = ["richField", "richText"];
 
 type Place = "below" | "beside" | "right" | "opposite";
 
@@ -58,6 +66,8 @@ export class Element {
   label: string;
   text = ""; // field, text, fileName, label; what was typed into an editable choice
   on = false; // toggle
+  formatted: Doc | null = null; // a rich element holding formatting: shown, not edited
+  edited = false; // typed into since the script last set it
   rows: Row[] = [];
   columns: { title: string; width: number }[] = [];
   multi = false; // more than one row may be selected
@@ -82,6 +92,7 @@ export class Element {
   slider: Slider | null = null;
   status: Status | null = null;
   canvas: Canvas | null = null;
+  toolbar: ToolBar | null = null;
   pair: [Element, Element] | null = null; // what a splitter stands between
 
   constructor(box: Box, kind: Kind, label: string) {
@@ -104,6 +115,8 @@ export class Box {
   on_screen = false;
   blocking = false; // displayed by block()
   destroyed = false;
+  /** Where and how big the script said, in pixels. */
+  geometry: { x?: number; y?: number; width?: number; height?: number; centred?: boolean } | null = null;
 
   constructor(title: string) {
     this.title = title;
@@ -132,6 +145,7 @@ export class Dialogs {
   callback: "DB" | "DBE" | null = null; // the kind of callback running
   painting: Element | null = null; // the canvas whose repaint callback is running
   popup: Popup | null = null; // a menu opened, until the host has been told
+  focus: number | null = null; // the element setFocus named, until the host has been told
   blocked: { box: Box; steps: Array<(env: any) => any>; env: any } | null = null;
   _told = 0;
 
@@ -201,7 +215,8 @@ export function run_steps(dialogs: Dialogs, steps: Array<(env: any) => any>, env
 
 export type DialogEvent = {
   box: number;
-  kind: "press" | "close" | "select" | "activate" | "check" | "expand" | "collapse" | "menu" | "choose";
+  kind: "press" | "close" | "select" | "activate" | "check" | "expand" | "collapse" | "menu" | "choose" | "tool";
+  text?: string | null; // typed into a tool bar's editable combo
   path?: string | null; // of a tree view item
   menu?: number | null;
   entry?: number | null;
@@ -257,8 +272,11 @@ export class DialogSession {
     this.dialogs.messages = [];
     const popup = this.dialogs.popup;
     this.dialogs.popup = null;
+    const focus = this.dialogs.focus;
+    this.dialogs.focus = null;
     return {
       popup,
+      focus,
       session: this.id,
       open: this.open,
       messages,
@@ -329,6 +347,11 @@ export class DialogSession {
     const element = [...box.elements, ...box.buttons].find((e) => e.id === event.element);
     if (!element || !usable(element)) return;
     const callbacks = element.callbacks;
+    if (event.kind === "tool") {
+      dialogs.callback = "DBE";
+      use_tool(this.rt, element, event);
+      return;
+    }
     if (event.kind === "menu" || event.kind === "choose") {
       this.menu(element, event);
       return;
@@ -380,6 +403,7 @@ export class DialogSession {
     const standing = (i: number): number => {
       const answer = this.call(menu.sensitive, [i]);
       if (typeof answer !== "number") throw new Fault(`the callback ${menu.sensitive.target.name} returned nothing`);
+      if (answer === 3) throw new Fault("ddbInvisible for a menu entry is not verified");
       return answer;
     };
     if (event.kind === "menu") {
@@ -428,9 +452,10 @@ function apply_values(dialogs: Dialogs, values: NonNullable<DialogEvent["values"
     const element = live.get(value?.id);
     if (!element) continue;
     const { kind, rows } = element;
-    if (typeof value.text === "string" && !element.read_only
-      && (kind === "field" || kind === "text" || kind === "fileName")) {
+    if (typeof value.text === "string" && !element.read_only && !element.formatted && TYPED.includes(kind)
+      && value.text !== element.text) {
       element.text = value.text;
+      element.edited = true;
     }
     if (kind === "toggle" && typeof value.on === "boolean") element.on = value.on;
     if (element.slider && Number.isInteger(value.position)) {
@@ -488,13 +513,13 @@ function element_spec(e: Element): any {
     on: e.on, rows: e.rows.map((r) => ({ cells: [...r.cells], selected: r.selected, checked: r.checked })),
     columns: e.columns.map((c) => ({ ...c })), multi: e.multi, checkboxes: e.checkboxes, editable: e.editable,
     vertical: e.vertical, readOnly: e.read_only, inactive: e.inactive, hidden: e.hidden, place: e.place, full: e.full,
-    width: e.width, height: e.height, isDefault: e.is_default, events: events_of(e),
+    width: e.width, height: e.height, isDefault: e.is_default, events: events_of(e), rich: e.formatted,
   };
 }
 
 function box_spec(box: Box): any {
   return {
-    id: box.id, title: box.title, blocking: box.blocking, closeButton: box.close_button,
+    id: box.id, title: box.title, blocking: box.blocking, closeButton: box.close_button, geometry: box.geometry,
     elements: box.elements.map(element_spec),
     buttons: box.buttons.map(element_spec),
   };
@@ -529,7 +554,7 @@ export function render_text(box: Box): string {
     else if (e.kind === "separator") lines.push("|  " + "-".repeat(24));
     else if (e.kind === "button") lines.push(`|  <${name}>${off}`);
     else if (e.kind === "toggle") lines.push(`|  [${e.on ? "x" : " "}] ${name}${off}`);
-    else if (e.kind === "field" || e.kind === "text" || e.kind === "fileName") {
+    else if (TYPED.includes(e.kind)) {
       lines.push(`|  ${head}[${e.text.replace(/\n/g, "\\n")}]${e.read_only ? " (read only)" : off}`);
     } else if (e.kind === "choice") {
       lines.push(`|  ${head}[${e.rows.find((r) => r.selected)?.cells[0] ?? e.text} v]${off}`
@@ -619,11 +644,27 @@ function selection_known(e: Element): void {
 const LISTS: Kind[] = ["list", "multiList", "listView"];
 const OPTIONS: Kind[] = ["choice", "list", "multiList", "listView"];
 
+/** A rich element's text, where markup and plain text would be the same string:
+ * which of the two DOORS hands back or reads is not documented. */
+function rich_plain(text: string, doing: string): string {
+  if (/[\\{}]/.test(text)) {
+    throw new Fault(`what ${doing} does with \\ { } in a rich text element is not documented, so it is not offered here`);
+  }
+  return text;
+}
+
 function get_string(rt: any, value: any): string {
   const e = element_of(rt, value, "field", "text", "fileName", "choice", "list", "multiList", "listView", "treeView",
-    "tab");
+    "tab", ...RICH);
   if (e.tree) return e.tree.chosen;
-  if (e.kind === "field" || e.kind === "text" || e.kind === "fileName") return e.text;
+  if (RICH.includes(e.kind)) {
+    if (e.formatted) {
+      throw new Fault("what get() gives for a rich text element holding formatting is not documented, so it is "
+        + "not offered here");
+    }
+    return rich_plain(e.text, "get()");
+  }
+  if (TYPED.includes(e.kind)) return e.text;
   if (e.kind === "choice") selection_known(e);
   const at = selected_index(e);
   return at < 0 ? e.text : e.rows[at].cells[0];
@@ -638,7 +679,7 @@ function get_int(rt: any, value: any): number {
 }
 
 function get_bool(rt: any, value: any): boolean {
-  const e = element_of(rt, value, "toggle", "field", "text");
+  const e = element_of(rt, value, "toggle", "field", "text", ...RICH);
   return e.kind === "toggle" ? e.on : e.read_only;
 }
 
@@ -830,6 +871,35 @@ export function register(lib: Library): void {
     (rt, b, label, initial) => file_name(rt, b, label, initial));
   add("set", ["DBE", "string", "string"], "void", (rt, e) => { element_of(rt, e, "fileName"); });
 
+  // The initial value written `richText ...` arrives as markup (compiler.ts).
+  const rich = (kind: "richField" | "richText", markup: boolean) =>
+    (rt: any, b: any, label: string, initial: string, width: number, height: number, read_only: boolean) => {
+      let doc: Doc | null = null, text = initial ?? "";
+      if (markup) {
+        try {
+          doc = parse(text);
+        } catch (e) {
+          if (e instanceof RichError) throw new Fault(e.message);
+          throw e;
+        }
+        text = plain_of(doc);
+      } else rich_plain(text, "a plain initial value");
+      const e = add_element(rt, b, kind, label);
+      e.text = text;
+      e.formatted = doc && is_formatted(doc) ? doc : null;
+      e.width = Math.max(0, width);
+      e.height = Math.max(0, height);
+      e.read_only = read_only;
+      return e;
+    };
+  for (const [initial, markup] of [["string", false], ["RichString_", true]] as const) {
+    const one = rich("richField", markup), many = rich("richText", markup);
+    add("richField", ["DB", "string", initial, "int"], "DBE", (rt, b, l, v, w) => one(rt, b, l, v, w, 0, false));
+    add("richField", ["DB", "string", initial, "int", "bool"], "DBE", (rt, b, l, v, w, r) => one(rt, b, l, v, w, 0, r));
+    add("richText", ["DB", "string", initial, "int", "bool"], "DBE", (rt, b, l, v, w, r) => many(rt, b, l, v, w, 0, r));
+    add("richText", ["DB", "string", initial, "int", "int", "bool"], "DBE", many);
+  }
+
   add("toggle", ["DB", "string", "bool"], "DBE", (rt, b, label, initial) => {
     const e = add_element(rt, b, "toggle", label);
     e.on = initial;
@@ -954,20 +1024,34 @@ export function register(lib: Library): void {
     "multiList"), i).cells[0]);
 
   add("set", ["DBE", "string"], "void", (rt, v, value) => {
-    const e = element_of(rt, v, "field", "text", "fileName", "label", "frame", "treeView", "tab");
-    if (e.tree) choose_path(e, value);
+    const e = element_of(rt, v, "field", "text", "fileName", "label", "frame", "treeView", "tab", ...RICH);
+    if (RICH.includes(e.kind)) {
+      e.text = rich_plain(value ?? "", "set()");
+      e.formatted = null;
+      e.edited = false;
+    } else if (e.tree) choose_path(e, value);
     else if (e.kind === "tab") {
       const at = e.rows.findIndex((r) => r.cells[0] === value);
       if (at < 0) throw new Fault(`there is no tab '${value}'`);
       select_only(e, at);
     } else if (e.kind === "label" || e.kind === "frame") e.label = value;
-    else e.text = value;
+    else {
+      e.text = value;
+      e.edited = false;
+    }
   });
-  add("set", ["DBE", "Buffer"], "void", (rt, v, buffer) => {
-    element_of(rt, v, "field", "text").text = rt.text("Buffer", rt.need(buffer, "Buffer"));
-  });
+  const from_buffer = (rt: any, v: any, buffer: any) => {
+    const e = element_of(rt, v, "field", "text");
+    e.text = rt.text("Buffer", rt.need(buffer, "Buffer"));
+    e.edited = false;
+  };
+  add("set", ["DBE", "Buffer"], "void", from_buffer);
+  add("setFromBuffer", ["DBE", "Buffer"], "void", from_buffer);
+  add("getBuffer", ["DBE"], "Buffer", (rt, v) => new Buffer(element_of(rt, v, "field", "text").text));
+  add("modified", ["DBE"], "bool", (rt, v) => element_of(rt, v, "field", "text", ...RICH).edited);
+  add("setFocus", ["DBE"], "void", (rt, v) => { state(rt).focus = element_of(rt, v).id; });
   add("set", ["DBE", "bool"], "void", (rt, v, value) => {
-    const e = element_of(rt, v, "toggle", "field", "text");
+    const e = element_of(rt, v, "toggle", "field", "text", ...RICH);
     if (e.kind === "toggle") e.on = value;
     else e.read_only = value;
   });

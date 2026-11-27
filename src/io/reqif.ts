@@ -13,6 +13,10 @@
 import {
   BOOLEAN_VALUES, StoreError, SYSTEM_ATTRIBUTES, _SPACE, _repr, _strip, parse_date,
 } from "../store.ts";
+import {
+  BOLD, ITALIC, STRIKE, SUB, SUPER, UNDERLINE, INDENT_STEP, doc_from, is_formatted, markup_of, parse, plain_of,
+} from "../rich.ts";
+import type { Doc, Run } from "../rich.ts";
 import type { AttrDef, Obj, Store } from "../store.ts";
 import { ensure_folder } from "./project.ts";
 
@@ -778,7 +782,7 @@ class _Attribute {
 
   // Append the ATTRIBUTE-VALUE for `text`. An empty value is only written
   // where its absence would mean the default instead.
-  value(parent: _Element, text: string): void {
+  value(parent: _Element, text: string, markup: string | null = null): void {
     const defaulted = Boolean(this.definition && this.definition.default);
     if (!text && !(defaulted && ["STRING", "XHTML", "ENUMERATION"].includes(this.kind))) return;
     const element = this.writer.add(parent, `ATTRIBUTE-VALUE-${this.kind}`);
@@ -787,6 +791,10 @@ class _Attribute {
       this.writer.xhtml = true;
       const div = new _Element("xhtml:div");
       this.writer.add(element, "THE-VALUE").children.push(div);
+      if (markup !== null) {
+        _xhtml_formatted(div, parse(markup));
+        return;
+      }
       const lines = _clean(text).replaceAll("\r\n", "\n").split("\n");
       div.text = lines[0];
       for (let i = 1; i < lines.length; i++) {
@@ -810,6 +818,60 @@ class _Attribute {
       if (this.kind === "STRING") this._allow(value);
       element.attrib.set("THE-VALUE", value);
     }
+  }
+}
+
+// bold and italic as elements; underline and strike, which XHTML 1.1 has no
+// presentation element for, as styles
+const _MARKS: readonly (readonly [number, string, string])[] = [
+  [BOLD, "xhtml:b", ""], [ITALIC, "xhtml:i", ""], [UNDERLINE, "xhtml:span", "text-decoration: underline"],
+  [STRIKE, "xhtml:span", "text-decoration: line-through"], [SUB, "xhtml:sub", ""], [SUPER, "xhtml:sup", ""]];
+
+function _xhtml_runs(holder: _Element, runs: Run[]): void {
+  for (const run of runs) {
+    let inner = holder;
+    for (const [bit, tag, style] of _MARKS) {
+      if (!(run.style & bit)) continue;
+      const made = new _Element(tag, new Map(style ? [["style", style]] : []));
+      inner.children.push(made);
+      inner = made;
+    }
+    const text = _clean(run.text), last = inner.children[inner.children.length - 1];
+    if (inner !== holder || !last) inner.text += text;
+    else last.tail += text;
+  }
+}
+
+// Lines within one element, with <xhtml:br/> between them.
+function _xhtml_lines(holder: _Element, paragraphs: Doc): void {
+  paragraphs.forEach((p, i) => {
+    if (i) holder.children.push(new _Element("xhtml:br"));
+    _xhtml_runs(holder, p.runs);
+  });
+}
+
+function _xhtml_formatted(div: _Element, doc: Doc): void {
+  if (!doc.some((p) => p.bullet || p.indent)) return _xhtml_lines(div, doc);
+  const indented = (tag: string, indent: number) =>
+    new _Element(tag, new Map(indent ? [["style", `margin-left: ${indent / 20}pt`]] : []));
+  for (let i = 0; i < doc.length;) {
+    const { bullet, indent } = doc[i];
+    let end = i + 1;
+    while (end < doc.length && doc[end].bullet === bullet && (bullet || doc[end].indent === indent)) end++;
+    if (bullet) {
+      const list = new _Element("xhtml:ul");
+      for (const p of doc.slice(i, end)) {
+        const item = indented("xhtml:li", p.indent);
+        _xhtml_runs(item, p.runs);
+        list.children.push(item);
+      }
+      div.children.push(list);
+    } else {
+      const block = indented("xhtml:p", indent);
+      _xhtml_lines(block, doc.slice(i, end));
+      div.children.push(block);
+    }
+    i = end;
   }
 }
 
@@ -845,11 +907,14 @@ export function export_reqif(store: Store, module_ids: Iterable<number>): ReqifE
     paths.set(module, where);
     const definitions = store.attributes(module, null);
     const names = new Set(definitions.map((a) => a.name));
+    // a String attribute with any formatted value is written as XHTML, which can carry it
+    const formattings = store.formattings(module);
+    const formatted = new Set([...formattings.values()].flatMap((held) => [...held.keys()]));
 
     const attributes_of = (owner: _Key, scope: string) => new Map<string, _Attribute>(
       definitions.filter((a) => a.scope === scope).map((a) => {
         const name = EXPORT_NAMES.get(a.name) ?? a.name;
-        const kind = a.name === "Object Text" ? "XHTML" : _kind(a);
+        const kind = a.name === "Object Text" || formatted.has(a.name) ? "XHTML" : _kind(a);
         return [a.name, new _Attribute(writer, owner, name, kind, a)];
       }));
 
@@ -894,7 +959,7 @@ export function export_reqif(store: Store, module_ids: Iterable<number>): ReqifE
         // attribute DXL: its value now; a failing one stops the export rather than send wrong data
         let text = attribute.definition?.dxl ? store.value(obj, name) : mine?.get(name) ?? "";
         if (name === "Foreign ID") text = text || store.identifier(obj);
-        attribute.value(values, text);
+        attribute.value(values, text, formattings.get(obj.absno)?.get(name) ?? null);
       }
       writer.ref(element, "TYPE", "SPEC-OBJECT-TYPE-REF", object_type);
 
@@ -979,60 +1044,108 @@ const _LINES: ReadonlySet<string> = new Set(
 const _SPACES = new RegExp(`[${_SPACE}]+`, "g");
 const _VISIBLE = new RegExp(`[^${_SPACE}]`);
 
-// Plain text of an XHTML value. Paragraph-like elements end lines, <br/> is a
-// line break, and source indentation counts as one space.
-function _xhtml_text(holder: _Element, lost: Set<_Element>): string {
+// An XHTML value as paragraphs of styled text. Paragraph-like elements end
+// lines, <br/> is a line break, and source indentation counts as one space.
+type _Format = { style: number; bullet: boolean; indent: number };
+
+const _STYLES: Readonly<Record<string, number>> = {
+  b: BOLD, strong: BOLD, i: ITALIC, em: ITALIC, u: UNDERLINE, s: STRIKE, strike: STRIKE, del: STRIKE,
+  sub: SUB, sup: SUPER };
+const _CSS: readonly (readonly [RegExp, number])[] = [
+  [/font-weight\s*:\s*bold/i, BOLD], [/font-style\s*:\s*italic/i, ITALIC],
+  [/text-decoration[^;]*underline/i, UNDERLINE], [/text-decoration[^;]*line-through/i, STRIKE]];
+
+function _format_in(node: _Element, tag: string, outer: _Format, lists: readonly string[]): _Format {
+  const css = node.get("style") ?? "";
+  let style = outer.style | (_STYLES[tag] ?? 0);
+  for (const [pattern, bit] of _CSS) if (pattern.test(css)) style |= bit;
+  if (style & SUB && style & SUPER) style &= ~(tag === "sup" ? SUB : SUPER);
+  const bullet = outer.bullet || (tag === "li" && lists[lists.length - 1] !== "ol");
+  const margin = /margin-left\s*:\s*(\d+(?:\.\d+)?)pt/i.exec(css);
+  const indent = margin ? Math.round(Number(margin[1]) * 20 / INDENT_STEP) * INDENT_STEP
+    : tag === "li" ? Math.max(0, lists.length - 1) * INDENT_STEP : outer.indent;
+  return { style, bullet, indent };
+}
+
+function _xhtml_doc(holder: _Element, lost: Set<_Element>): Doc {
   // Marks that cannot occur in XML text: collapsible space, end of line, end of cell.
   const soft = "\x00", block = "\x01", cell = "\x02";
-  const out: string[] = [];
+  const out: [string, _Format][] = [];
   let visible = 0; // how many pieces of source text were more than space
 
-  const add = (text: string) => {
+  const add = (text: string, format: _Format) => {
     if (!text) return;
     if (_VISIBLE.test(text)) visible += 1;
-    out.push(text.includes("\n") ? text.replace(_SPACES, soft) : text);
+    out.push([text.includes("\n") ? text.replace(_SPACES, soft) : text, format]);
   };
 
-  type Frame = { node: _Element; tag: string; next: number; slot: number; seen: number };
-  const stack: Frame[] = [];
-  const enter = (node: _Element) => {
+  type Frame = { node: _Element; tag: string; next: number; slot: number; seen: number; format: _Format };
+  const stack: Frame[] = [], lists: string[] = [];
+  const plain: _Format = { style: 0, bullet: false, indent: 0 };
+  const enter = (node: _Element, outer: _Format) => {
     const tag = node.tag.slice(node.tag.lastIndexOf("}") + 1);
+    const format = _format_in(node, tag, outer, lists);
+    if (tag === "ul" || tag === "ol") lists.push(tag);
     let slot = -1;
     if (tag === "object") { // a picture or OLE object; its content is the fallback text
       lost.add(node);
-      slot = out.push("") - 1;
+      slot = out.push(["", format]) - 1;
     }
     const seen = visible;
-    if (tag === "br") out.push("\n");
-    if (_LINES.has(tag)) out.push(block);
-    if (tag === "li") out.push("- ");
-    add(node.text);
-    stack.push({ node, tag, next: 0, slot, seen });
+    if (tag === "br") out.push(["\n", format]);
+    if (_LINES.has(tag)) out.push([block, format]);
+    // a numbered list has no formatting to become, so its items stay marked
+    if (tag === "li" && !format.bullet) out.push(["- ", format]);
+    add(node.text, format);
+    stack.push({ node, tag, next: 0, slot, seen, format });
   };
 
-  add(holder.text);
+  add(holder.text, plain);
   for (const top of holder.children) {
-    enter(top);
+    enter(top, plain);
     while (stack.length) {
       const frame = stack[stack.length - 1];
       if (frame.next < frame.node.children.length) {
-        enter(frame.node.children[frame.next++]);
+        enter(frame.node.children[frame.next++], frame.format);
         continue;
       }
       stack.pop();
-      if (frame.slot >= 0 && visible === frame.seen) out[frame.slot] = "[embedded object]";
-      if (_LINES.has(frame.tag)) out.push(block);
-      else if (frame.tag === "td" || frame.tag === "th") out.push(cell);
-      add(frame.node.tail);
+      if (frame.tag === "ul" || frame.tag === "ol") lists.pop();
+      if (frame.slot >= 0 && visible === frame.seen) out[frame.slot][0] = "[embedded object]";
+      const around = stack[stack.length - 1]?.format ?? plain;
+      if (_LINES.has(frame.tag)) out.push([block, frame.format]);
+      else if (frame.tag === "td" || frame.tag === "th") out.push([cell, around]);
+      add(frame.node.tail, around);
     }
   }
 
-  const text = out.join("").replace(/[\x00-\x02]+/g, (run) => (run.includes(block) ? block : run));
+  let text = out.map(([piece]) => piece).join("");
+  let formats: _Format[] = out.flatMap(([piece, format]) => Array<_Format>(piece.length).fill(format));
+  const rewrite = (pattern: RegExp, to: (found: string) => string) => {
+    const kept: _Format[] = [];
+    let result = "", done = 0;
+    for (const match of text.matchAll(pattern)) {
+      const found = match[0], put = to(found);
+      result += text.slice(done, match.index) + put;
+      for (let i = done; i < match.index; i++) kept.push(formats[i]);
+      const from = match.index + (put === "\n" ? found.indexOf("\n") + 1 || 1 : 1) - 1;
+      for (let i = 0; i < put.length; i++) kept.push(formats[put === found ? match.index + i : from]);
+      done = match.index + found.length;
+    }
+    for (let i = done; i < text.length; i++) kept.push(formats[i]);
+    text = result + text.slice(done);
+    formats = kept;
+  };
+
+  rewrite(/[\x00-\x02]+/g, (run) => (run.includes(block) ? block : run));
   let start = 0, end = text.length;
   while (start < end && text[start] <= cell) start++;
   while (end > start && text[end - 1] <= cell) end--;
-  return text.slice(start, end).replace(/\x00?\n\x00?/g, "\n")
-    .replaceAll(block, "\n").replaceAll(soft, " ").replaceAll(cell, "\t");
+  text = text.slice(start, end);
+  formats = formats.slice(start, end);
+  rewrite(/\x00?\n\x00?/g, () => "\n");
+  text = text.replaceAll(block, "\n").replaceAll(soft, " ").replaceAll(cell, "\t");
+  return doc_from(text, formats);
 }
 
 // The identifier that `element`'s `wrapper` child refers to.
@@ -1118,7 +1231,7 @@ class _Content {
     const kind = element.tag.slice(element.tag.lastIndexOf("-") + 1);
     if (kind === "XHTML") {
       const holder = element.find(_q("THE-VALUE"));
-      return holder === null ? "" : _xhtml_text(holder, this.lost);
+      return holder === null ? "" : plain_of(_xhtml_doc(holder, this.lost));
     }
     if (kind === "ENUMERATION") {
       return [...element.iter(_q("ENUM-VALUE-REF"))].map((r) => {
@@ -1140,6 +1253,19 @@ class _Content {
       return time === "" || time === "00:00:00" ? date : `${date} ${time}`;
     }
     return text;
+  }
+
+  // attribute name -> markup, for the values of a SPEC-OBJECT that are formatted.
+  formattings(element: _Element): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const entry of element.find(_q("VALUES"))?.children ?? []) {
+      const definition = this.definitions.get(_ref(entry, "DEFINITION"));
+      const holder = entry.tag.endsWith("-XHTML") ? entry.find(_q("THE-VALUE")) : null;
+      if (!definition || holder === null || out.has(definition.name)) continue;
+      const doc = _xhtml_doc(holder, this.lost);
+      if (plain_of(doc) && is_formatted(doc)) out.set(definition.name, markup_of(doc));
+    }
+    return out;
   }
 
   // attribute name -> text, for a SPEC-OBJECT or SPECIFICATION.
@@ -1177,6 +1303,8 @@ function _merge(definitions: _Definition[]): Map<string, _Definition> {
 // The name of a module type fitting the definition, creating it if needed.
 function _type_for(store: Store, module: number, d: _Definition): string {
   if (d.kind === "BOOLEAN") return "Boolean";
+  // a String attribute written as XHTML because of its formatting
+  if (d.kind === "XHTML" && d.type === "String") return "String";
   if (d.kind === "ENUMERATION" && !d.values.length) return "String";
   const base = d.kind === "ENUMERATION" ? "Enumeration" : BASE_OF[d.kind];
   const values = base === "Enumeration" ? d.values : [];
@@ -1307,7 +1435,12 @@ function _import_specification(store: Store, folder: string, content: _Content, 
       for (const [name, text] of content.values(content.objects.get(reference)!)) {
         if (store.attribute(module, name)?.scope === "object") mine.set(name, _clean(text));
       }
-      obj = store.create_object(module, parent === null ? null : made[parent], null, null, mine);
+      const rich = new Map([...content.formattings(content.objects.get(reference)!)].filter(([name, markup]) => (
+        ["String", "Text"].includes(store.attribute(module, name)?.base ?? "")
+        && mine.get(name) === plain_of(parse(markup)))));
+      obj = store.create_object(module, parent === null ? null : made[parent], null, null,
+                                new Map([...mine].filter(([name]) => !rich.has(name))));
+      for (const [name, markup] of rich) store.set_rich(obj, name, markup);
     } catch (error) {
       if (!(error instanceof StoreError)) throw error;
       throw new StoreError(`${specification.get("LONG-NAME") ?? "None"}, object ${reference}: ${error.message}`);

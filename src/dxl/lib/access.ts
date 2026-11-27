@@ -3,9 +3,9 @@
 // A Permission is the store's bits, already closed over what each right brings.
 // An AccessRec is one entry of a thing's own list; the name is null for the
 // entry that covers everyone else. Not offered: access to views, attribute
-// definitions and types, groups, partitions and the rights create propagates.
+// types, groups' own lists, partitions and the rights create propagates.
 
-import { RIGHTS, closed_rights } from "../../store.ts";
+import { RIGHTS, StoreError, closed_rights } from "../../store.ts";
 import type { AccessEntry } from "../../store.ts";
 import type { Library } from "../registry.ts";
 import { Fault, limit } from "../runtime.ts";
@@ -111,7 +111,90 @@ function register_records(lib: Library): void {
   }
 }
 
+type Change = (own: AccessEntry[] | undefined, effective: AccessEntry[]) => AccessEntry[] | undefined;
+type Target = {
+  read(): { entries: AccessEntry[]; inherited: boolean };
+  change(change: Change): void;
+};
+
+const specific: Change = (own, effective) => own ?? effective;
+const inherit: Change = () => undefined;
+
+function listed(own: AccessEntry[] | undefined): AccessEntry[] {
+  if (!own) throw new StoreError("the access rights are inherited; make them specific first");
+  return own;
+}
+
+// The calls for one kind of thing with a list of its own, found from `params`.
+function register_inner(lib: Library, params: string[], suffix: string,
+  target: (rt: Runtime, args: any[]) => Target): void {
+  const n = params.length;
+  const add = (name: string, more: string[], impl: (t: Target, ...rest: any[]) => string) =>
+    lib.add(name + suffix, [...params, ...more], "string",
+      (rt: Runtime, ...args: any[]) => impl(target(rt, args.slice(0, n)), ...args.slice(n)));
+
+  for (const who of ["string", "null"]) {
+    add("set", ["Permission", who], (t, rights: number, name: string | null) => {
+      const entry = entry_name(name ?? "");
+      return changing(() => t.change((own) => [...listed(own).filter((e) => e.name !== entry),
+        { name: entry, rights: closed_rights(rights) }]));
+    });
+  }
+  add("specific", [], (t) => changing(() => t.change(specific)));
+  add("inherited", [], (t) => changing(() => t.change(inherit)));
+  add("unset", ["string"], (t, name: string) => {
+    const entry = entry_name(name);
+    if (entry === null) return "no user or group was named";
+    return changing(() => t.change((own) => {
+      if (!listed(own).some((e) => e.name === entry)) throw new StoreError(`there is no access entry for ${entry}`);
+      return listed(own).filter((e) => e.name !== entry);
+    }));
+  });
+  add("unsetAll", [], (t) => changing(() => t.change((own) => listed(own).filter((e) => e.name === null))));
+  add("isAccessInherited", ["&bool"], (t, out: Ref) => attempt(() => out.set(t.read().inherited)));
+}
+
+function view_of(rt: Runtime, view: any): { module_id: number; name: string } {
+  const v = rt.need(view, "View");
+  rt.opened_module(v.module_id);
+  if (!rt.store.views(v.module_id).has(v.name)) {
+    throw new Fault(`access rights of the view ${v.name} are not offered here: it is not a saved view`);
+  }
+  return v;
+}
+
+function register_inner_lists(lib: Library): void {
+  for (const [suffix, part] of [["Def", "definition"], ["Val", "values"]] as const) {
+    register_inner(lib, ["Module", "AttrDef"], suffix, (rt, [m, d]) => {
+      const module_id = rt.opened_module(m), name: string = rt.need(d, "AttrDef").name;
+      return {
+        read: () => rt.store.attribute_access(module_id, name, part),
+        change: (change) => rt.store.change_attribute_access(module_id, name, part, change),
+      };
+    });
+  }
+  register_inner(lib, ["View"], "", (rt, [view]) => {
+    const { module_id, name } = view_of(rt, view);
+    return {
+      read: () => rt.store.view_access(module_id, name),
+      change: (change) => rt.store.change_view_access(module_id, name, change),
+    };
+  });
+  lib.loop("View", "AccessRec", (rt: Runtime, view: any) => {
+    const { module_id, name } = view_of(rt, view);
+    const { entries, inherited } = rt.store.view_access(module_id, name);
+    return inherited ? [] : entries;
+  });
+  for (const type_name of THINGS) {
+    lib.add("unsetAll", [type_name], "string", (rt: Runtime, x: any) => {
+      const thing = guarded(rt, type_name, x);
+      return changing(() => rt.store.unset_access(thing, null));
+    });
+  }
+}
+
 export function register(lib: Library): void {
+  register_inner_lists(lib);
   register_permissions(lib);
   register_changes(lib);
   register_records(lib);

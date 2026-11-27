@@ -18,7 +18,7 @@ const CHANGES = new Set(["create_item", "update_item", "delete_item", "add_objec
   "modify_attribute", "purge_object", "purge_item", "set_project", "add_link_rule", "remove_link_rule",
   "set_links_exclusive", "create_linkset", "delete_linkset", "set_default_link", "change_access",
   "move_objects", "delete_objects", "undelete_objects", "set_value_many", "create_links", "delete_out_links", "delete_links_between", "delete_all_links",
-  "record_session", "copy_module", "create_set_definition", "update_set_definition", "delete_set_definition",
+  "record_session", "user_event", "copy_module", "create_set_definition", "update_set_definition", "delete_set_definition",
   "create_baseline_set", "add_to_baseline_set", "close_baseline_set"]);
 
 const scope = self as any;

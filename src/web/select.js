@@ -69,7 +69,7 @@ function paintSelection() {
 
 function extendSelection(absno) {
   // let an open editor save before the panel is rebuilt
-  if (document.activeElement && document.activeElement.matches("input, textarea, select")) document.activeElement.blur();
+  if (document.activeElement && document.activeElement.matches("input, textarea, select, .richarea")) document.activeElement.blur();
   if (!selectedRow()) select(absno);
   S.picks = new Set(selectionRun(S.data.rows, S.selected, absno));
   paintSelection();
@@ -234,5 +234,5 @@ async function deleteModuleLinks() {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !e.target.closest("input, textarea, select, dialog") && !document.querySelector(".menu")) clearSelection();
+  if (e.key === "Escape" && !e.target.closest("input, textarea, select, dialog, .richbox") && !document.querySelector(".menu")) clearSelection();
 }, true); // before the menus close on the same key

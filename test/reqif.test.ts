@@ -142,7 +142,10 @@ test("DOORS-style names and XHTML are read from a .reqifz", () => {
   assert.equal(result.embedded_objects, 1);
   const [heading, text] = store.objects(store.module_at("/Pump spec")!);
   assert.equal(store.value(heading, "Object Heading"), "Pumping");
-  assert.equal(store.value(text, "Object Text"), "The pump shall start within 2 s.\n- quietly\n[embedded object]");
+  // the list item is a bulleted paragraph and the bold word is bold, not "- " and plain
+  assert.equal(store.value(text, "Object Text"), "The pump shall start within 2 s.\nquietly\n[embedded object]");
+  assert.equal(store.rich_value(text, "Object Text"),
+    "The pump {\\b shall} start within 2 s.\n\\pard{\\*\\pn\\pnlvlblt}quietly\n\\pard [embedded object]");
   assert.equal(store.value(text, "Foreign ID"), "17");
   assert.ok(store.parent_object(text)!.equals(heading));
 });

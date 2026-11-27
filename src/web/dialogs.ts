@@ -10,6 +10,7 @@ declare function act(work: () => unknown): Promise<void>;
 declare function writtenFile(path: string, text: string): any;
 declare function loadTree(): Promise<void>;
 declare function refresh(): Promise<void>;
+declare function richNodes(doc: any): any[];
 
 /** Passes one event to the engine; resolves with its reply. */
 export type Send = (session: number, event: any) => Promise<any>;
@@ -23,7 +24,7 @@ type Widget = {
   inner?: any;
 };
 type Panel = { node: any; menu: any; body: any; foot: any; status: any; fault: any; title: any; layout: string;
-  widgets: Map<number, Widget> };
+  placed: string; widgets: Map<number, Widget> };
 
 let session = 0;
 let send: Send | null = null;
@@ -86,9 +87,43 @@ function draw(spec: any): void {
       panel.node.style.left = Math.max(4, (window.innerWidth - width) / 2 + i * 24) + "px";
       panel.node.style.top = 64 + i * 24 + "px";
     } else fill(panel, box);
+    place(panel, box.geometry);
   });
+  if (spec.focus) focus_on(spec.focus);
   if (spec.popup) show_popup(spec.popup);
   if (spec.messages?.length) show_messages(spec.messages);
+}
+
+/** Where and how big the script said. Applied when it changes, so that a box the
+ * person has since dragged stays put. Screen places become places on the page. */
+function place(panel: Panel, geometry: any): void {
+  const key = JSON.stringify(geometry ?? null);
+  if (key === panel.placed) return;
+  panel.placed = key;
+  if (!geometry) return;
+  const { x, y, width, height, centred } = geometry, style = panel.node.style;
+  const within = (value: number, most: number) => Math.max(0, Math.min(value, most)) + "px";
+  if (width) {
+    style.minWidth = "0";
+    style.maxWidth = "calc(100vw - 8px)";
+    style.width = Math.max(120, Math.min(width, window.innerWidth - 8)) + "px";
+  }
+  if (height) style.height = Math.max(60, Math.min(height, window.innerHeight - 8)) + "px";
+  if (centred) {
+    style.left = within((window.innerWidth - panel.node.offsetWidth) / 2, window.innerWidth);
+    style.top = within((window.innerHeight - panel.node.offsetHeight) / 2, window.innerHeight);
+  } else if (x !== undefined) {
+    style.left = within(x, window.innerWidth - 60);
+    style.top = within(y, window.innerHeight - 40);
+  }
+}
+
+function focus_on(element: number): void {
+  const can = "input, textarea, select, button, [tabindex], [contenteditable]";
+  for (const panel of panels.values()) {
+    const node = panel.widgets.get(element)?.node;
+    if (node) (node.matches(can) ? node : node.querySelector(can))?.focus();
+  }
 }
 
 function show_messages(messages: any[]): void {
@@ -131,7 +166,7 @@ function make_panel(box: any): Panel {
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", up);
   });
-  return { node, menu, body, foot, status, fault, title, layout: "", widgets: new Map() };
+  return { node, menu, body, foot, status, fault, title, layout: "", placed: "null", widgets: new Map() };
 }
 
 /** The widget's description as it would be had the engine taken what the person set. */
@@ -326,9 +361,15 @@ function make_canvas(spec: any): Widget {
   const canvas = h("canvas", { class: "element dxlcanvas", width, height, role: "img",
     "aria-label": ops.filter((o: any) => o[0] === "text").map((o: any) => o[4]).join(", ") || "drawing" });
   const g = canvas.getContext("2d");
-  for (const [op, colour, a, b, c, d, size, bold] of ops) {
+  for (const [op, colour, ...rest] of ops) {
+    const [a, b, c, d, size, bold] = rest;
     g.fillStyle = g.strokeStyle = colour;
-    if (op === "rect") g.fillRect(a, b, c, d);
+    if (op === "polygon") {
+      g.beginPath();
+      for (let i = 0; i < rest.length; i += 2) g[i ? "lineTo" : "moveTo"](rest[i] + 0.5, rest[i + 1] + 0.5);
+      g.closePath();
+      g.stroke();
+    } else if (op === "rect") g.fillRect(a, b, c, d);
     else if (op === "box") g.strokeRect(a + 0.5, b + 0.5, c, d);
     else if (op === "ellipse") {
       g.beginPath();
@@ -352,6 +393,36 @@ function make_canvas(spec: any): Widget {
   return { node: canvas, spec, read: () => null };
 }
 
+// -- tool bars: each tool is a button named by its tool tip, since there are no icons
+
+function make_tools(box: number, spec: any): Widget {
+  const { name, tools } = spec.toolbar;
+  const use = (entry: number, more: any = {}) => event(box, { kind: "tool", element: spec.id, entry, ...more });
+  const items = tools.map((tool: any, i: number) => {
+    if (tool.state === 3) return null;
+    if (tool.type === 4) return h("span", { class: "gap" });
+    const off = spec.inactive || tool.state === 0 || tool.state === null;
+    const title = (off ? tool.off_help : tool.help) || tool.tip;
+    if (tool.type !== 3 && tool.type !== 5) {
+      return h("button", { type: "button", disabled: off, title, "aria-pressed": tool.state === 2 ? "true" : null,
+        onclick: () => use(i) }, tool.tip || `tool ${i}`);
+    }
+    const select = h("select", { disabled: off, title, "aria-label": tool.tip },
+      h("option", { value: "-1" }, ""), tool.items.map((text: string, n: number) => h("option", { value: String(n) }, text)));
+    select.value = String(tool.chosen);
+    if (tool.width > 0) select.style.width = Math.min(Math.max(tool.width, 40), 400) + "px";
+    select.addEventListener("change", () => { if (select.value !== "-1") use(i, { row: Number(select.value) }); });
+    if (tool.type === 3) return select;
+    const typed = h("input", { type: "text", value: tool.typed, disabled: off, placeholder: "or type",
+      "aria-label": tool.tip + ", typed" });
+    typed.addEventListener("change", () => use(i, { text: typed.value }));
+    return h("span", {}, select, typed);
+  });
+  const node = h("div", { class: "element dxltools", role: "toolbar", "aria-label": name || "tool bar" },
+    name ? h("span", { class: "name" }, name) : null, items);
+  return { node, spec, read: () => null };
+}
+
 // -- frames, tabs, sliders, bars and splitters -------------------------------------
 
 function sized(node: any, spec: any): any {
@@ -363,6 +434,7 @@ function sized(node: any, spec: any): any {
 function make_part(box: number, spec: any, fire: (kind: string) => void): Widget | null {
   if (spec.kind === "treeView") return with_menu(box, spec, make_tree(box, spec));
   if (spec.kind === "canvas") return with_menu(box, spec, make_canvas(spec));
+  if (spec.kind === "toolBar") return make_tools(box, spec);
   if (spec.kind === "frame") {
     const inner = h("div", { class: "inner" });
     const node = sized(h("div", { class: "element dxlframe" + (spec.full ? " full" : ""), role: "group",
@@ -462,18 +534,27 @@ function make_widget(box: number, spec: any): Widget {
       class: "element" + (spec.isDefault ? " primary" : "") + (spec.full ? " full" : ""),
       onclick: () => fire("press") }, spec.label));
   }
-  if (spec.kind === "field" || spec.kind === "fileName") {
+  // a rich element holding formatting is shown; without any it is typed into
+  if (spec.rich) {
+    const view = h("div", { class: "dxlrich", role: "document", tabindex: "0", "aria-label": spec.label || "text" });
+    view.append(...richNodes(spec.rich));
+    if (spec.kind === "richText" && spec.width > 0) view.style.width = Math.min(spec.width, 900) + "px";
+    if (spec.height > 0) view.style.height = Math.min(Math.max(spec.height, 40), 600) + "px";
+    return plain(labelled(view, spec.kind === "richText" && spec.width > 0 ? "stacked" : "stacked full"));
+  }
+  const kind = spec.kind === "richField" ? "field" : spec.kind === "richText" ? "text" : spec.kind;
+  if (kind === "field" || kind === "fileName") {
     const input = h("input", { type: "text", value: spec.text, disabled: off, readOnly: spec.readOnly });
     if (spec.width > 0) input.size = Math.min(spec.width, 100);
     if (has("enter")) {
       input.addEventListener("keydown", (e: any) => { if (e.key === "Enter") fire("select"); });
     }
-    const node = spec.kind === "fileName"
+    const node = kind === "fileName"
       ? labelled(h("span", {}, input, h("span", { class: "hint" }, " a file kept in this page")), "full")
       : labelled(input);
     return { node, spec, read: () => ({ id: spec.id, text: input.value }) };
   }
-  if (spec.kind === "text") {
+  if (kind === "text") {
     const area = h("textarea", { value: spec.text, disabled: off, readOnly: spec.readOnly });
     if (spec.width > 0) area.style.width = Math.min(spec.width, 900) + "px";
     if (spec.height > 0) area.style.height = Math.min(Math.max(spec.height, 40), 600) + "px";

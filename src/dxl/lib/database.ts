@@ -727,7 +727,7 @@ export function register_objects(lib: Library): void {
   });
   lib.add("gotoObject", ["int", "Module"], "Object", (rt: Runtime, absno: number, m: any) => {
     const found = object_by_number(rt, absno, m);
-    if (found !== null) rt._current.set(found.module_id, found);
+    if (found !== null) rt.make_current(found);
     return found;
   });
   lib.add("undelete", ["Object"], "string", undelete_object);
@@ -844,32 +844,9 @@ function change_option(symbol: string, adding: boolean) {
   };
 }
 
-/** The rich text of a value, only where it is certainly the value itself: this
- * database keeps no formatting, and how DOORS would mark up anything but
- * plain one-line ASCII is not verified. */
-function plain_rich_text(rt: Runtime, attribute: AttrRef): string {
-  const value = attribute.get() as string;
-  if (!/^[ -~]*$/.test(value) || /[\\{}]/.test(value)) {
-    throw new Fault(`rich text of ${_repr(attribute.name)}: only one line of plain ASCII without \\ { or } `
-      + "is supported here");
-  }
-  return value;
-}
-
-function register_rich_text(lib: Library): void {
-  for (const name of ["richText", "richTextWithOle", "richTextNoOle"]) {
-    lib.add(name, ["attr"], "string", plain_rich_text);
-  }
-  lib.add("richText", ["attr", "bool"], "string", (rt: Runtime, a: AttrRef, font_table: boolean) => {
-    if (font_table) throw new Fault("richText with a font table is not supported here");
-    return plain_rich_text(rt, a);
-  });
-  // there are no OLE objects in this database
-  lib.add("containsOle", ["attr"], "bool", (rt: Runtime, a: AttrRef) => { a.get(); return false; });
-}
-
 export function register_values(lib: Library): void {
-  register_rich_text(lib);
+  // there are no OLE objects in this database
+  lib.add("containsOle", ["attr"], "bool", (_rt: Runtime, a: AttrRef) => { a.get(); return false; });
   lib.add("getBoundedAttr", ["attr", "int"], "string", (rt: Runtime, a: AttrRef, n: number) => {
     const characters = Array.from(a.get() as string);
     if (n < 0) throw new Fault("getBoundedAttr: the number of characters cannot be negative");

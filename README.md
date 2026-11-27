@@ -99,23 +99,70 @@ as a script. The command line draws the box as text and runs no callback.
   tree views, sliders, status bars, menu bars, right-click menus on lists,
   trees and canvases (also on a button, for touch), and canvases with
   `rectangle`, `box`, `line`, `ellipse`, `polarLine`, `draw`, `drawAngle`,
-  `font`, the colour functions and `width`/`height`.
+  `font`, the colour functions, `polygon`, and `width`/`height`.
+- Also: `richField` and the `richText` box; `setPos`, `setSize`,
+  `setCenteredSize`, `setParent`, `setFocus`, `getBuffer`, `setFromBuffer`, and
+  `modified`.
+- Tool bars with buttons, toggles, spacers, and combos. There are no icons (the
+  include file that names them is not here), so each tool is a button labelled
+  with its tool tip. `toolBarMove`, and radio behaviour beyond what the
+  script's sensitivity function reports, are not offered.
+- Rich elements show formatting given as `richText ...` in their initial value.
+  A formatted one is shown, not edited. `get`, `set`, and a plain initial value
+  work only for text without `\ { }` and, for `get`, without formatting: the
+  manual does not say whether they deal in markup.
 - On those: a canvas is repainted when its box is shown and after each action;
   its colour shades and fonts are this suite's. Icons, menu mnemonics and
   Ctrl hot keys are accepted and do nothing. Refused because the manual does not
   settle them: a tree item with no parent or a repeated name, `inactive` on a
-  frame, a second right-click menu, and `polygon`.
-- Not offered: tool bars, HTML controls, rich text fields, canvas bitmaps,
-  printing, mouse callbacks and scroll bars, drag and drop, and setting
-  positions and sizes (`setPos`, `setSize`).
+  frame, and a second right-click menu.
+- Not offered: HTML controls, canvas bitmaps (a script's files here
+  are text only), `query` and `messageBox` (a script here cannot wait for the
+  answer), reading positions and sizes (`getPos`, `getSize`), printing, mouse
+  callbacks and scroll bars, and drag and drop.
 - Approximated: placement (`left`, `beside`, `full`, ...) and sizes only roughly
-  match; styles and `stacked` are ignored. Message boxes do not pause the
+  match; styles and `stacked` are ignored. `setPos` places a box on the page,
+  not the screen, and a box is never made larger than the window. A polygon is
+  drawn as a closed outline. `modified` is true once the text has been changed
+  by hand since the script last set it, as seen when a callback runs. Message boxes do not pause the
   script. The "Answer Yes to confirm()" tick answers `confirm`; you are not
   asked. There is no file browser, and `progressCancelled` is always false.
 - Stricter than DOORS may be: nothing may follow `show` where it is written,
   and `block` is only offered as a top-level statement.
 - None of it has been compared with a real DOORS. Look at every box there
   before relying on it.
+
+## Formatted text
+
+`String` and `Text` values can be bold, italic, underlined, struck through,
+subscript, superscript, bulleted, and indented. In the interface, edit a value
+and press Format; a value that is already formatted opens that way. Formatting
+is kept in the saved database, baselines, project files, copy and paste, and
+ReqIF. CSV carries text only; importing a row whose text is unchanged leaves
+its formatting alone.
+
+In DXL: `o."Object Text" = richText "..."` reads the right side as markup,
+`richText(o."Object Text")` gives a value as markup, and `for` loops over
+`RichTextParagraph` and `RichText` take it apart. Also `isRichText`,
+`removeUnlistedRichText`, `findRichText`, `replaceRichText`, `cutRichText`,
+`applyTextFormattingToParagraph`, and `richtext_identifier`. A plain assignment
+removes formatting. Reading an attribute without `richText` gives plain text, so
+history, baseline compare, filters, and exports to CSV see plain text.
+
+Check these in real DOORS before you rely on them:
+
+- How DOORS writes bullets and indent in the markup is not published. Here they
+  are `\pard`, `\liN`, and `{\*\pn\pnlvlblt}`. Read formatting through the loops;
+  do not pick the markup string apart.
+- An empty line comes out of the chunk loop as an empty chunk with `newline`
+  set; DOORS may differ.
+- Refused: markup other than the above (fonts, colours, tables, whole RTF
+  documents), `richText` of characters outside the Windows Western set,
+  `richText` beside other text on the right of an attribute assignment,
+  `.charset`, `.isUrl` on text that looks like a link, `richTextFragment`,
+  `exportRTFString`, `importRTF`, and the clipboard functions.
+- A ReqIF file's bulleted list is read as bulleted paragraphs; numbered list
+  items keep a "- " instead.
 
 ## Analysis menu
 
@@ -131,22 +178,32 @@ DXL, not all of it. Anything else is refused by name with a line number, and
 a real DOORS name that is not here says so, so you can tell it from a typo.
 `copyToClipboard` and `activateURL` show what they would copy or open; neither
 is done. `platform` answers `WIN32`, and `userLocale` is the US-style locale
-dates are already read and written in.
+dates are already read and written in. `dxlHere()` can only be printed, and
+what it prints is this suite's own wording.
 
-- No OLE (Excel and Word automation) and no triggers. No tool bars or HTML
-  controls in dialog boxes (see Dialog boxes above).
-- Access rights can be set and are enforced for folders, projects, modules, and
-  objects, but there is one user and no groups, and read access cannot be taken
-  away. View definitions (`ViewDef`) do not keep a script's filter or sort.
+- No OLE (Excel and Word automation). No HTML controls in
+  dialog boxes (see Dialog boxes above).
+- Triggers: persistent module open, object sync, and attribute save triggers,
+  pre and post. They run for what you do in the interface. A script, an import,
+  or anything else that would reach one stops, because the manuals do not say
+  whether DOORS fires it then. No dynamic, drag-and-drop, project level, module
+  close, or object open triggers.
+- Users, groups, and access rights can be set and are enforced, including on
+  attribute definitions, attribute values, and views. You are one user, and
+  rights under which you could not read something are refused: nothing is ever
+  hidden. No passwords, LDAP, or user details beyond names.
+- A view definition (`ViewDef`) keeps columns only: not a script's filter or
+  sort, and a view is saved only with its other settings off.
 - In the interface, Help lists what is full, partial, and not offered, and DXL
   coverage name by name. Offered there means at least one form works.
 - Baseline sets, module copy, and history sessions work in part; a script stops
   where the manuals do not say what DOORS would do.
-- One person at a time: no locks or shareable editing.
+- One person at a time. A script can lock and unlock a closed module, for that
+  run only; there are no lock lists, section locks, or shareable editing.
 - Columns and saved views work, and are shared with the interface. Built-in
   columns have stand-in widths.
-- Text is stored without formatting. `richText()` answers only for one line of
-  plain ASCII without `\ { }`; there is no `RichText` loop.
+- Formatted text has no fonts, colours, links, pictures, tables, or numbered
+  lists (see Formatted text above).
 - The only code page is `CP_UTF8`.
 - `pragma runLim` is accepted and not enforced; the command line stops a script after 10 minutes (`--timeout`). Recursion is limited to a few
   hundred levels. No function-pointer parameters; of operator definitions, only `::` ones.

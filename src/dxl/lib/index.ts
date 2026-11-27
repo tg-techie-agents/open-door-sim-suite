@@ -7,12 +7,16 @@ import * as dialogs from "./dialogs.ts";
 import * as filters from "./filters.ts";
 import * as layout from "./layout.ts";
 import * as management from "./management.ts";
+import * as richtext from "./richtext.ts";
+import * as session from "./session.ts";
 import * as access from "./access.ts";
 import * as sets from "./sets.ts";
 import * as conf from "./conf.ts";
 import * as schema from "./schema.ts";
 import * as setup from "./setup.ts";
 import * as text from "./text.ts";
+import * as triggers from "./triggers.ts";
+import * as users from "./users.ts";
 import * as views from "./views.ts";
 
 const _built = new Map<boolean, Library>();
@@ -23,7 +27,7 @@ export function build_library(for_layout: boolean = false): Library {
   if (lib) return lib;
   lib = new Library();
   // listed here, not at the top level: the modules import one another
-  const MODULES = [core, text, database, management, schema, access, sets, conf, setup, filters, views, dialogs];
+  const MODULES = [core, text, database, management, schema, access, sets, conf, setup, filters, views, dialogs, session, triggers, richtext, users];
   for (const module of for_layout ? [...MODULES, layout] : MODULES) module.register(lib);
   for (const handle of [...lib.handles].sort()) {
     lib.add("null", [handle], "bool", (_rt, value) => value === null || value === undefined);

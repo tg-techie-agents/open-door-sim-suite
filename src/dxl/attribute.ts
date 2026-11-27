@@ -66,9 +66,10 @@ function run_code(store: Store, frame: Frame, code: string, deadline: number): v
   const runtime = new Runtime(build_library(false), store, { write: () => {} }, ".", refuse,
     new Files(".", false, false, new VirtualDisk()));
   runtime.deadline = deadline;
-  runtime.module = runtime.open(frame.obj.module_id, "read");
+  runtime.opened.set(frame.obj.module_id, "read");
+  runtime.module = frame.obj.module_id;
   runtime.folder = store.item(frame.obj.module_id).parent!;
-  runtime.object = frame.obj;
+  runtime._current.set(frame.obj.module_id, frame.obj);
   runtime.state.set(OWN, frame);
 
   const compiler = new Compiler(runtime);

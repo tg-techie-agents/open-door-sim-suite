@@ -58,6 +58,7 @@ export class Library {
   strings: Map<string, Impl> = new Map(); // type -> fn(rt, value) -> string, for types that concatenate like base types
   defaults: Map<string, Impl> = new Map(); // type -> fn(rt) -> value, for a declared but uninitialised variable
   attrs: Map<string, [Impl, Impl]> = new Map(); // owner type -> [getter(rt, owner, name), setter(rt, owner, name, str)]
+  rich_attrs: Map<string, Impl> = new Map(); // owner type -> fn(rt, owner, name, markup): `x."name" = richText ...`
   currents: Map<string, Impl> = new Map(); // `current <type>` where it is not simply what was set: fn(rt) -> value
   resets: Map<string, Impl> = new Map(); // owner type -> fn(rt, owner, name), for `x."name" = (string null)`
   // key(owner type, name) -> [type, getter]: a second type the same property can be read as

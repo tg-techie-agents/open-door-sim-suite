@@ -4,7 +4,7 @@
 import type { Library } from "../registry.ts";
 import { Fault } from "../runtime.ts";
 import type { Runtime } from "../runtime.ts";
-import { create_before, move } from "./database.ts";
+import { create_before, find, item_deleted, move, project_of } from "./database.ts";
 
 /** Using DOORS 9.2: projects, folders and modules may be named with letters,
  * digits, spaces, periods, underscores and hyphens. The answer is the first
@@ -41,7 +41,9 @@ function split_heading_and_text(rt: Runtime, object: any): string {
       + "is not documented");
   }
   const made = create_before(rt, old);
-  rt.store.set_value(made, "Object Heading", heading);
+  const markup = rt.store.formatting(old, "Object Heading");
+  if (markup === null) rt.store.set_value(made, "Object Heading", heading);
+  else rt.store.set_rich(made, "Object Heading", markup);
   rt.store.set_value(old, "Object Heading", "");
   move(rt, old, new Map([["parent", made]]));
   return "";
@@ -51,6 +53,25 @@ export function register(lib: Library): void {
   for (const name of ["getInvalidCharInModuleName", "getInvalidCharInProjectName"]) {
     lib.add(name, ["string"], "char", (_rt, s) => invalid_char(s));
   }
+  // the first character not allowed, or (read as a bool) whether there is none
+  const named = (s: string) => {
+    if (!s) throw new Fault("isValidName: what DOORS answers for an empty name is not documented");
+    return invalid_char(s);
+  };
+  lib.add("isValidName", ["string"], "char", (_rt, s) => named(s));
+  lib.add("isValidName", ["string"], "bool", (_rt, s) => named(s) === "\0");
+  // opening and closing a project move the current folder and nothing else
+  lib.add("openProject", ["string"], "string", (rt: any, name: string) => {
+    const found = find(rt, name, ["project"]);
+    if (found === null || item_deleted(rt, found)) return `there is no project ${name}`;
+    rt.folder = found;
+    return "";
+  });
+  lib.add("closeProject", [], "void", (rt: any) => {
+    const project = project_of(rt, rt.folder);
+    if (project === null) throw new Fault("closeProject: there is no current project; what DOORS then does is not documented");
+    rt.folder = rt.store.item(project).parent!;
+  });
   lib.add("downgrade", ["Module"], "bool", (rt: any, m: any) => {
     if (rt.modified.has(m)) {
       throw new Fault("downgrade: save the module first; what becomes of unsaved changes is not documented");
@@ -60,6 +81,6 @@ export function register(lib: Library): void {
   lib.add("downgradeShare", ["Module"], "bool",
     (rt: any, m: any) => lower_mode(rt, m, "downgradeShare", ["edit"], "share"));
   lib.add("splitHeadingAndText", ["Object"], "string", split_heading_and_text);
-  // text is stored without formatting here, so there are no Symbol-font characters to convert
+  // no fonts are held here, so there are no Symbol-font characters to convert
   lib.add("unicodeString", ["attr"], "string", (_rt, ref) => ref.get());
 }

@@ -8,10 +8,9 @@
 //   where: for what no menu holds.
 
 const ONE_USER = "one person, one browser: there is nobody to share or lock with";
-const NO_RICH = "objects hold plain text only";
+const NO_RICH = "not built: formatted text holds no links or pictures";
 const NO_TABLES = "tables are not built";
 const NO_PROPOSALS = "change proposals are not built";
-const NO_USERS = "no list of users or groups; access rights name a user";
 const NO_EXTERNAL = "external links are not built";
 
 const FEATURES = {
@@ -38,8 +37,8 @@ const FEATURES = {
   moveItem: ["Database", "Cut, copy or paste item", "no", "moving folders or modules and copying folders is not built; to copy a module use Copy module"],
   copyModule: ["Database", "Copy module...", "part", "a formal module beside itself under a new name, with views and out-links; not in-links or baselines. Refused where what DOORS does is not documented: deleted objects, links inside the module, access rights of its own"],
   showDeletedItems: ["Database", "Show deleted items", "full", ""],
-  accessRights: ["Database", "Access rights...", "part", "read, create, modify, delete and admin, for a folder, project, module or object, by user name; enforced on changes. No read restrictions, rights on views or attributes, or groups"],
-  users: ["Database", "Manage users and groups...", "no", NO_USERS],
+  accessRights: ["Database", "Access rights...", "part", "read, create, modify, delete and admin, for a folder, project, module or object, by user or group name; enforced on changes. Rights on attributes and views are set from a script, not here. Nothing can be hidden from you"],
+  users: ["Database", "Manage users and groups...", "no", "no screen for it: a script makes users and groups (addUser, addGroup, addMember, saveDirectory), and access rights then go by them"],
   copyUrl: ["Database", "Copy URL", "no", "there are no DOORS addresses here"],
   favouriteAdd: ["Database", "Add to favourites", "part", "favourites are kept in this browser, not in the database"],
   favouriteOrganise: ["Database", "Organise favourites...", "part", "remove and reorder; kept in this browser"],
@@ -112,7 +111,7 @@ const FEATURES = {
   template: ["Editing", "Insert template", "no", "templates are not built"],
   picture: ["Editing", "Insert picture or OLE object", "no", NO_RICH],
   oleProperties: ["Editing", "OLE object properties and size", "no", "there are no OLE objects here"],
-  richText: ["Editing", "Bold, italic, underline, indent, bullets", "no", NO_RICH],
+  richText: ["Editing", "Bold, italic, underline, indent, bullets", "part", "strikethrough, subscript and superscript too, in String and Text values; no fonts, colours, numbered lists or tables"],
   tables: ["Editing", "Table: insert, rows, columns, properties", "no", NO_TABLES],
   forms: ["Editing", "Forms: new, run, edit, delete", "no", "forms are not built; edit in Properties"],
   dragObjects: ["Editing", "Drag and drop objects or items", "no", "not built: use Cut and Paste, or Move", "mouse"],
@@ -192,7 +191,7 @@ const FEATURES = {
   linkSettings: ["Links", "Link module rules...", "part", "default linkset pairings and link limits, kept per folder (also from Module properties, Linksets); both modules must already exist"],
   defaultLink: ["Links", "Set default link module...", "full", ""],
   linksets: ["Links", "New and delete linkset", "part", "deleting a linkset deletes its links; no new single link from this window", "open a link module"],
-  triggers: ["DXL", "Triggers...", "no", "triggers are not built: nothing runs when something is opened, saved or changed"],
+  triggers: ["DXL", "Triggers...", "no", "no screen for it: a script defines module open, object sync and attribute save triggers, and they run for what you do here"],
   // analysis
   wizard: ["Traceability", "Traceability wizard...", "part", "writes layout DXL columns; run here only, not checked in DOORS"],
   traceColumns: ["Traceability", "Traceability columns...", "full", ""],
@@ -349,7 +348,7 @@ function objectMenu() {
     M("collapse", () => setCollapsed(true), can.object()),
     M("expand", () => setCollapsed(false), can.object()),
     M("accessRights", objectAccess, can.object()),
-    SUB("More", [...contentEntries(), X("discussions"), X("richText"), X("externalLinks")]),
+    SUB("More", [...contentEntries(), X("discussions"), M("richText", formatMain, can.change()), X("externalLinks")]),
   ];
 }
 
@@ -465,7 +464,7 @@ const MENUS = {
     X("discussions", "Discussion..."),
     X("tables", "Table..."),
     X("picture", "Picture or OLE object..."),
-    SUB("Other", [X("symbol"), X("insertUrl"), X("template"), X("forms"), X("oleProperties"), X("richText")]),
+    SUB("Other", [X("symbol"), X("insertUrl"), X("template"), X("forms"), X("oleProperties"), M("richText", formatMain, can.change())]),
   ],
   Link: () => [
     ...linkEntries(),

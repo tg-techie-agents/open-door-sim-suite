@@ -13,6 +13,7 @@
 
 import { other_forms, unavailable } from "./unavailable.ts";
 import { StoreError } from "../store.ts";
+import { here_text } from "./lib/session.ts";
 import { OSError, join_path, normpath } from "./files.ts";
 import { Overload, key, same_params } from "./registry.ts";
 import type { Library } from "./registry.ts";
@@ -114,6 +115,21 @@ export function is_stack_overflow(e: any): boolean {
 const FAILURES = new Set(["OSError", "ValueError", "OverflowError", "IndexError"]);
 
 /** What a library function may raise that becomes a run-time error. */
+/** Mark each `dxlHere()` that a print statement shows as it is, joined only to
+ * text: `print dxlHere() "\n"`, `print "at " dxlHere()`, `print(dxlHere() "")`. */
+function mark_printed_here(expr: Node): void {
+  let parts: Node[];
+  if (expr[0] === "juxta" && expr[2][0][0] === "name" && expr[2][0][2] === "print") parts = expr[2].slice(1);
+  else if (expr[0] === "call" && expr[2] === "print" && expr[3].length === 1) {
+    parts = expr[3][0][0] === "juxta" ? expr[3][0][2] : [expr[3][0]];
+  } else return;
+  const here = (n: Node) => n[0] === "call" && n[2] === "dxlHere" && n[3].length === 0;
+  parts.forEach((part, i) => {
+    // after anything but text, it could be that thing's argument
+    if (here(part) && (i === 0 || parts[i - 1][0] === "string" || here(parts[i - 1]))) (part as any).printed = true;
+  });
+}
+
 function library_failure(e: any): boolean {
   if (e instanceof OSError || e instanceof ValueError || e instanceof OverflowError || e instanceof IndexError) {
     return true;
@@ -363,7 +379,9 @@ export class Compiler {
     if (name === "null") return [constant("null", null)];
     if (name === "current") {
       const rt = this.rt;
-      return [["Module", () => rt.module], ["Object", () => rt.object], ["Folder", () => rt.folder]];
+      return [["Module", () => rt.module], ["Object", () => rt.object], ["Folder", () => rt.folder],
+        // in a running trigger's DXL, also the trigger
+        ...(this.lib.functions.has(name) ? this.apply(line, name, []).filter(([t]) => t === "Trigger") : [])];
     }
     if (var_ === null && !this.lib.functions.has(name)) {
       if (TYPES.has(name)) throw new DxlError(line, `${name} is a type, not a value`);
@@ -517,7 +535,7 @@ export class Compiler {
   bind(line: number, arg: Arg, param: string): Fn {
     const callback = /^(\w+)\((.*)\)$/.exec(param);
     if (callback) {
-      const signature = callback[2].split(",");
+      const signature = callback[2] ? callback[2].split(",") : [];
       const found = arg.functions?.find((f) => f.return_type === callback[1] && same_params(f.params, signature));
       if (!found) throw new DxlError(line, `this argument must be the name of a function ${param}`);
       return (env) => new Callback(found, env[0]);
@@ -590,7 +608,18 @@ export class Compiler {
       const missing = unavailable(name);
       if (missing) throw new DxlError(line, missing);
     }
-    const args: Arg[] = arg_nodes.map((a: Node) => this.arg(a));
+    if ((node as any).printed && this.lookup(name) === null) {
+      const text = here_text(this.file, line);
+      return [["string", () => text]];
+    }
+    const args: Arg[] = arg_nodes.map((a: Node, i: number) => {
+      // a rich dialog element's initial value written `richText ...` is markup
+      if (i === 2 && arg_nodes.length > 3 && (name === "richField" || name === "richText") && this.lookup(name) === null) {
+        const markup = this.rich_markup(line, a);
+        if (markup) return new Arg([["RichString_", markup]]);
+      }
+      return this.arg(a);
+    });
     const out = this.apply(line, name, args);
     if (TYPES.has(name) && args.length === 1) out.push(...this.cast(line, name, args[0].cands));
     if (!out.length) {
@@ -628,6 +657,10 @@ export class Compiler {
         return;
       }
       for (let j = i + 2; j <= end; j++) {
+        // richText takes the one operand after it, so `richText o."A" "\n"` is
+        // (richText o."A") "\n", never richText of the two joined
+        if (name === "richText" && j > i + 2 && !compiler.is_function(items[i + 1])
+          && compiler.lookup(name) === null) break;
         let argument: Arg;
         if (j === i + 2) {
           argument = !compiler.is_function(items[i + 1]) ? compiler.arg(items[i + 1]) : new Arg(value(i + 1, j));
@@ -1096,6 +1129,7 @@ export class Compiler {
 
   s_expr(node: Node): Fn {
     const expr = node[2];
+    mark_printed_here(expr);
     const cands = this.expr(expr);
     let effects = cands.filter(([t]) => t === "void" || t === "Stream");
     if (!effects.length) effects = cands;
@@ -1313,6 +1347,8 @@ export class Compiler {
       const impl = registered[1], text = this.value(source, "string");
       return (env) => impl(rt, reference(env), text(env));
     }
+    const rich = this.rich_markup(line, source);
+    if (rich) return (env) => reference(env).set_rich(rich(env));
     const cands = this.expr(source);
     const writable = cands.filter(([t]) => BASE.includes(t) || t === "attr" || this.lib.strings.has(t));
     if (writable.length !== 1) throw new DxlError(line, `cannot assign ${show(cands)} to an attribute`);
@@ -1323,6 +1359,32 @@ export class Compiler {
       const text = kind === "bool" ? (raw ? "True" : "False") : rt.text(kind, raw);
       reference(env).set(text);
     };
+  }
+
+  /** `o."Name" = richText ...` reads the right hand side as markup rather
+   * than storing it as text. The markup, or null for any other right hand side. */
+  rich_markup(line: number, source: Node): Fn | null {
+    let node = source;
+    while (node[0] === "group") node = node[2];
+    const rich = (n: Node): boolean => (n[0] === "call" && n[2] === "richText")
+      || (n[0] === "name" && n[2] === "richText");
+    let args: Node[];
+    if (node[0] === "call" && node[2] === "richText") {
+      args = node[3];
+    } else if (node[0] === "juxta" && node[2].some(rich)) {
+      if (node[2].length !== 2 || node[2][0][0] !== "name" || node[2][0][2] !== "richText") {
+        throw new DxlError(line, "richText beside other text on the right of an attribute assignment is not "
+          + "documented: build the markup in a string, then assign richText of that");
+      }
+      args = [node[2][1]];
+    } else {
+      return null;
+    }
+    if (this.lookup("richText") !== null) return null; // the script's own name
+    if (args.length === 1 && !this.expr(args[0]).some(([t]) => t === "attr")) {
+      return this.value(args[0], "string"); // the string is the markup itself
+    }
+    return args.length === 1 || args.length === 2 ? this.value(node, "string") : null;
   }
 
   /** Is this the cast `(string null)`? */
@@ -1511,6 +1573,9 @@ export class Compiler {
       if (impl) matches.push([impl, fn]);
     }
     if (matches.length !== 1) {
+      if (var_type.startsWith("RichText") && cands.some(([t]) => t === "attr")) {
+        throw new DxlError(line, "looping over an attribute itself is not documented here: loop over richText of it");
+      }
       throw new DxlError(line, `no loop over ${show(cands)} with a ${var_type} variable`);
     }
     const [impl, fn] = matches[0];

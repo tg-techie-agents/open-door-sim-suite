@@ -5,7 +5,10 @@
 //     const column = layout(source, store, module_id); // Map absolute number -> text
 
 import "./attribute.ts"; // gives the store its way to run attribute DXL
-import { StoreError } from "../store.ts";
+import { Obj, Store, StoreError } from "../store.ts";
+import type { Trigger, TriggerContext } from "../store.ts";
+import { RUNNING } from "./lib/triggers.ts";
+import type { Running } from "./lib/triggers.ts";
 import { Compiler, is_stack_overflow } from "./compiler.ts";
 import type { Env, Fn } from "./compiler.ts";
 import { Files, OSError, VirtualDisk } from "./files.ts";
@@ -58,7 +61,8 @@ function _prepare(source: string, store: any, out: Out | null, open_module: stri
   if (open_module) {
     const module_id = store.module_at(open_module);
     if (module_id === null) throw new DxlError(0, `no module ${py_repr(open_module)}`);
-    runtime.module = runtime.open(module_id, "edit");
+    runtime.opened.set(module_id, "edit"); // already open: the person is in it
+    runtime.module = module_id;
     runtime.folder = store.item(module_id).parent;
     if (view) {
       try {
@@ -175,6 +179,66 @@ export function run(source: string, store: any, out: Out | null = null, open_mod
   return result;
 }
 
+// How long a trigger may run before the action it watches is given up.
+const TRIGGER_MS = 5000;
+
+/** Run one trigger's DXL for what the person is doing. What it prints is kept
+ * on the store for the interface; it has no files, and confirm is refused.
+ * Answers whether a pre trigger passed (a post trigger always has). */
+function run_trigger(store: Store, trigger: Trigger, context: TriggerContext): boolean {
+  const { row } = trigger;
+  const out = { write: (text: string) => store.trigger_output.push(text) };
+  const ask = () => {
+    throw new Fault("confirm in a trigger is not offered here");
+  };
+  const runtime = new Runtime(build_library(), store, out, ".", ask, new Files(".", false, false, new VirtualDisk()));
+  runtime.deadline = Date.now() + TRIGGER_MS;
+  runtime.folder = store.item(context.module).parent!;
+  // before a module opens there is no module for its trigger to be in
+  if (!(row.level === "module" && row.when === "pre")) {
+    runtime.opened.set(context.module, "edit");
+    runtime.module = context.module;
+    if (context.absno !== null) runtime._current.set(context.module, new Obj(context.module, context.absno));
+  }
+  const running: Running = { trigger, context, status: null };
+  runtime.state.set(RUNNING, running);
+  const failed = (why: string) => new StoreError(`the trigger ${py_repr(row.name)} could not run here: ${why}`);
+  const changes = store.total_changes;
+  const dialogs = open_dialogs(runtime, { interactive: false });
+  try {
+    const steps = _compile(new Compiler(runtime), row.dxl);
+    _contained(() => run_steps(dialogs, steps, [new Map(), new Map()]));
+  } catch (e: any) {
+    if (e instanceof DxlError) throw failed(`line ${e.line} of its DXL: ${e.message}`);
+    if (e instanceof Fault || e instanceof OSError) throw failed(e.message);
+    if (!(e instanceof Halt)) throw e;
+  } finally {
+    dialogs.stop_progress();
+    for (const closer of runtime.closers) closer();
+  }
+  carry_out(runtime);
+  if (row.when !== "pre") return true;
+  if (store.total_changes !== changes) {
+    throw failed("a pre trigger that changes the database is not offered here");
+  }
+  if (running.status !== "trigPreConPass" && running.status !== "trigPreConFail") {
+    throw failed("it did not set trigPreConPass or trigPreConFail, and what DOORS then does is not documented");
+  }
+  return running.status === "trigPreConPass";
+}
+
+Store.trigger_engine = {
+  run: run_trigger,
+  check(store: Store, dxl: string): void {
+    try {
+      check(dxl, store);
+    } catch (e: any) {
+      if (!(e instanceof DxlError)) throw e;
+      throw new Fault(`the trigger's DXL is not offered here: line ${e.line}: ${e.message}`);
+    }
+  },
+};
+
 /** Run layout DXL (a column such as a traceability column) over a module.
  *
  * The script is checked once, then run for each object that is not deleted,
@@ -186,7 +250,8 @@ export function layout(source: string, store: any, module_id: number, out: Out |
   const runtime = new Runtime(build_library(true), store, out || stdout, base_dir, null,
     new Files(base_dir, false, false, disk));
   runtime.deadline = deadline;
-  runtime.module = runtime.open(module_id, "read");
+  runtime.opened.set(module_id, "read");
+  runtime.module = module_id;
   runtime.folder = store.item(module_id).parent;
   const compiler = new Compiler(runtime);
   const obj = compiler.declare(0, "obj", "Object");

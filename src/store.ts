@@ -18,6 +18,8 @@
 // The tables are Maps with indexes,
 // and a transaction is an undo journal.
 
+import { escape_text, is_formatted, markup_of, parse, plain_of } from "./rich.ts";
+
 export class StoreError extends Error {
   // A request the database refuses. The message is meant for the user.
   constructor(message: string) {
@@ -161,6 +163,45 @@ export function closed_rights(rights: number): number {
 
 export function rights_names(rights: number): string[] {
   return Object.entries(RIGHTS).filter(([, bit]) => rights & bit).map(([name]) => name);
+}
+
+// The users and groups of the database. A group's members are user names.
+export type Directory = {
+  users: { name: string; uid: string }[];
+  groups: { name: string; members: string[] }[];
+};
+
+// Persistent triggers. Each is held by the thing it watches: a module, or a
+// project or the database root for all the formal modules inside it. Only the
+// kinds the interface itself can fire are held, so none is stored and never run.
+export type TriggerRow = {
+  name: string;
+  level: "module" | "object" | "attribute";
+  when: "pre" | "post";
+  event: "open" | "sync" | "save";
+  word: string; // the event as it was written: open or read; save, write, or modify
+  priority: number;
+  dxl: string;
+  formal?: boolean; // written with ->formal
+  attribute?: string; // attribute level: one attribute only
+  absno?: number; // object and attribute level: one object only
+};
+export type Trigger = { at: number; row: TriggerRow };
+// what a trigger is running about
+export type TriggerContext = {
+  module: number; absno: number | null; attribute: string | null; value: string | null;
+};
+export type TriggerEngine = {
+  // Runs one trigger's DXL. For a pre trigger, answers whether it passed.
+  run(store: Store, trigger: Trigger, context: TriggerContext): boolean;
+  // Refuses DXL that would not run here.
+  check(store: Store, dxl: string): void;
+};
+
+export function trigger_covers(row: TriggerRow, level: string, event: string, absno: number | null,
+  attribute: string | null): boolean {
+  return row.level === level && row.event === event && (row.absno === undefined || row.absno === absno)
+    && (row.attribute === undefined || row.attribute === attribute);
 }
 
 // Baseline set definitions are held by a folder or project. A baseline set is
@@ -333,6 +374,9 @@ export const SYSTEM_ATTRIBUTES: readonly string[] = [
 
 export const ROOT = 1;
 
+// the base types whose values can carry formatting
+export const RICH_BASES: readonly string[] = ["String", "Text"];
+
 // -- text behaviour, shared with io/ -------------------------------------------
 
 export const _SPACE = "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
@@ -495,12 +539,17 @@ type _ItemRow = {
   // link modules: linksets made before any link was, as [source, target] module ids
   linksets?: [number, number][];
   access?: AccessEntry[]; // own access rights; absent: inherited
+  triggers?: TriggerRow[];
   baseline_sets?: SetDefinition[];
   sessions?: { user: string; date: string }[]; // each opening for editing, in order
 };
 type _TypeRow = { base: string; vals: string[] } & TypeExtras;
 type _DefRow = { type_name: string; scope: string; multi: number; dflt: string; position: number; dxl?: string }
-  & Omit<DefExtras, "min" | "max">;
+  & Omit<DefExtras, "min" | "max">
+  // own access rights over the definition, and over its values; absent: inherited
+  & { def_access?: AccessEntry[]; val_access?: AccessEntry[] };
+export type AttrPart = "definition" | "values";
+const _PART = { definition: "def_access", values: "val_access" } as const;
 type _ObjectRow = {
   absno: number; parent: number | null; position: number; deleted: number; created_by: string;
   created_on: string; modified_by: string; modified_on: string; changed_seq: number;
@@ -520,6 +569,8 @@ type _ModuleData = {
   // children of each parent absno (null: top level), kept sorted by position, absno
   kids: Map<number | null, _ObjectRow[]>;
   values: Map<number, Map<string, string>>;
+  // formatting of some of those values, as canonical markup of the same text
+  rich: Map<number, Map<string, string>>;
   views: Map<string, string>;
   history: History[];
   object_history: Map<number, History[]>;
@@ -527,7 +578,7 @@ type _ModuleData = {
 
 function _empty_module(): _ModuleData {
   return { types: new Map(), defs: new Map(), module_values: new Map(), objects: new Map(), kids: new Map(),
-           values: new Map(), views: new Map(), history: [], object_history: new Map() };
+           values: new Map(), rich: new Map(), views: new Map(), history: [], object_history: new Map() };
 }
 
 // where `row` is, or belongs, in a sibling list
@@ -644,6 +695,12 @@ function _rename_in_view(node: any, from: string, to: string): boolean {
 export class Store {
   // Runs attribute DXL. The DXL engine puts itself here when it is loaded.
   static dxl_engine: ((store: Store, obj: Obj, name: string, code: string) => string) | null = null;
+  // Runs trigger DXL. The DXL engine puts itself here too.
+  static trigger_engine: TriggerEngine | null = null;
+  // set while the person at the interface is doing the thing a trigger watches
+  _by_hand: boolean;
+  directory: Directory; // replaced whole by set_directory, never changed in place
+  trigger_output: string[]; // what triggers printed, until the interface takes it
   // What attribute DXL has calculated, by "module:absno:name". Like DOORS, a
   // value is kept until it is reset; unlike stored values it is never saved.
   _computed: Map<string, { value: string } | { error: string }>;
@@ -676,6 +733,9 @@ export class Store {
     this.default_link_name = null;
     this._conf = new Map();
     this._guarded = false;
+    this._by_hand = false;
+    this.directory = { users: [], groups: [] };
+    this.trigger_output = [];
     this.total_changes = 0;
     this._depth = 0;
     this._clock = null;
@@ -1282,7 +1342,8 @@ export class Store {
     { name?: string; type_name?: string; multi?: boolean; default?: string; dxl?: string }): void {
     this.transaction(() => {
       this._writable(module_id);
-      this._require(module_id, RIGHTS.modify, "modify an attribute");
+      this._require_both(this._modules.get(module_id)?.defs.get(name)?.def_access, module_id, RIGHTS.modify,
+        "modify an attribute", `the definition of ${_repr(name)}`);
       const old = this.attribute(module_id, name);
       if (!old) throw new StoreError(`no attribute ${_repr(name)}`);
       const data = this._modules.get(module_id)!;
@@ -1296,6 +1357,7 @@ export class Store {
       if (renamed !== name && data.defs.has(renamed)) {
         throw new StoreError(`attribute ${_repr(renamed)} already exists`);
       }
+      if (renamed !== name) this._unwatched(module_id, name, "renaming");
       const row: _DefRow = { ...data.defs.get(name)!, ..._def_extras(changes) };
       row.type_name = changes.type_name ?? row.type_name;
       const type = data.types.get(row.type_name);
@@ -1323,6 +1385,11 @@ export class Store {
           this._put(held, renamed, held.get(name)!);
           this._drop(held, name);
         }
+        for (const held of data.rich.values()) {
+          if (!held.has(name)) continue;
+          this._put(held, renamed, held.get(name)!);
+          this._drop(held, name);
+        }
         for (const [view, json] of data.views) {
           const definition = JSON.parse(json);
           if (_rename_in_view(definition, name, renamed)) this._put(data.views, view, JSON.stringify(definition));
@@ -1334,7 +1401,13 @@ export class Store {
         for (const held of [data.module_values, ...data.values.values()]) {
           if (held.get(renamed) === old.default) this._put(held, renamed, row.dflt);
         }
+        for (const [absno, held] of data.rich) {
+          if (data.values.get(absno)?.get(renamed) !== plain_of(parse(held.get(renamed) ?? ""))) {
+            this._drop(held, renamed);
+          }
+        }
       }
+      if (!RICH_BASES.includes(type.base)) for (const held of data.rich.values()) this._drop(held, renamed);
       this._check_values(module_id, renamed);
       this.forget_computed(module_id, name);
       this.total_changes += 1;
@@ -1348,12 +1421,15 @@ export class Store {
       if (STANDARD_ATTRIBUTES.some(([n]) => n === name)) {
         throw new StoreError(`${_repr(name)} is a standard attribute`);
       }
-      this._require(module_id, RIGHTS.delete, "delete an attribute");
+      this._require_both(this._modules.get(module_id)?.defs.get(name)?.def_access, module_id, RIGHTS.delete,
+        "delete an attribute", `the definition of ${_repr(name)}`);
       if (!this.attribute(module_id, name)) throw new StoreError(`no attribute ${_repr(name)}`);
+      this._unwatched(module_id, name, "deleting");
       const data = this._modules.get(module_id)!;
       this._drop(data.defs, name);
       this._drop(data.module_values, name);
       for (const held of data.values.values()) this._drop(held, name);
+      for (const held of data.rich.values()) this._drop(held, name);
       this.forget_computed(module_id, name);
       this.total_changes += 1;
       this._record(module_id, null, "deleteAttr", name);
@@ -1414,8 +1490,11 @@ export class Store {
       if (definition === null || definition.scope !== "module") {
         throw new StoreError(`unknown module attribute ${_repr(name)}`);
       }
-      this._require(module_id, RIGHTS.modify, "change a module attribute");
+      this._require_both(this._modules.get(module_id)!.defs.get(name)!.val_access, module_id, RIGHTS.modify,
+        "change a module attribute", `the values of ${_repr(name)}`);
       value = Store.check_value(definition, value);
+      this.refuse_triggered({ module: module_id, absno: null, attribute: name, value }, "attribute", "save",
+        `a value given to the module attribute ${_repr(name)}`);
       this._put(this._modules.get(module_id)!.module_values, name, value);
       this._stamp(module_id);
       this.total_changes += 1;
@@ -1666,6 +1745,7 @@ export class Store {
       this._detach(data, row);
       this._drop(data.objects, obj.absno);
       this._drop(data.values, obj.absno);
+      this._drop(data.rich, obj.absno);
       this.total_changes += 1;
       this._record(obj.module_id, obj.absno, "purgeObject");
     });
@@ -1690,6 +1770,7 @@ export class Store {
         this._detach(data!, row);
         this._drop(data!.objects, obj.absno);
         this._drop(data!.values, obj.absno);
+        this._drop(data!.rich, obj.absno);
         this.total_changes += 1;
         this._record(module_id, obj.absno, "purgeObject");
       }
@@ -1800,7 +1881,57 @@ export class Store {
     return out;
   }
 
+  // The formatting the value shown for this attribute has, as markup, or null.
+  formatting(obj: Obj, name: string): string | null {
+    const data = this._modules.get(obj.module_id);
+    if (data?.values.get(obj.absno)?.has(name)) return data.rich.get(obj.absno)?.get(name) ?? null;
+    if (!data?.defs.get(name)?.inherit) return null;
+    const up = this.parent_object(obj);
+    return up ? this.formatting(up, name) : null;
+  }
+
+  // value() as rich text markup, formatted or not.
+  rich_value(obj: Obj, name: string): string {
+    const value = this.value(obj, name);
+    return this.formatting(obj, name) ?? escape_text(value);
+  }
+
+  // Map absno -> Map name -> markup: the formatted values of a module, those
+  // inherited too unless `own`.
+  formattings(module_id: number, own: boolean = false): Map<number, Map<string, string>> {
+    const out = new Map<number, Map<string, string>>();
+    const data = this._modules.get(module_id);
+    if (!data || ![...data.rich.values()].some((held) => held.size)) return out;
+    const inherited = own ? [] : [...data.defs].filter(([, d]) => d.inherit && d.scope === "object").map(([n]) => n);
+    for (const absno of [...(inherited.length ? data.objects.keys() : data.rich.keys())].sort((a, b) => a - b)) {
+      const mine = new Map(data.rich.get(absno) ?? []);
+      for (const name of inherited) {
+        const markup = this.formatting(new Obj(module_id, absno), name);
+        if (markup !== null) mine.set(name, markup);
+      }
+      if (mine.size) out.set(absno, new Map([...mine].sort((a, b) => _cmp(a[0], b[0]))));
+    }
+    return out;
+  }
+
+  // Plain text, which takes the place of any formatting the value had.
   set_value(obj: Obj, name: string, value: string): void {
+    this._set_value(obj, name, value, null);
+  }
+
+  // Rich text markup: the value becomes the text it shows, with its formatting.
+  set_rich(obj: Obj, name: string, markup: string): void {
+    let doc;
+    try {
+      doc = parse(markup);
+    } catch (error) {
+      throw new StoreError(`${name}: ${(error as Error).message}`);
+    }
+    const value = plain_of(doc);
+    this._set_value(obj, name, value, value && is_formatted(doc) ? markup_of(doc) : null);
+  }
+
+  _set_value(obj: Obj, name: string, value: string, markup: string | null): void {
     this.transaction(() => {
       this._writable(obj.module_id);
       if (SYSTEM_ATTRIBUTES.includes(name)) throw new StoreError(`${_repr(name)} is set by the database`);
@@ -1812,12 +1943,31 @@ export class Store {
         throw new StoreError(`${_repr(name)} is calculated by attribute DXL and cannot be given a value here `
           + "(in DXL, assign (string null) to have it calculated again)");
       }
-      this._require(obj, RIGHTS.modify, "change an attribute value");
+      this._require_both(this._modules.get(obj.module_id)!.defs.get(name)!.val_access, obj, RIGHTS.modify,
+        "change an attribute value", `the values of ${_repr(name)}`);
       value = Store.check_value(definition, value);
       this._object_row(obj);
+      if (markup !== null && !RICH_BASES.includes(definition.base)) {
+        throw new StoreError(`${name}: formatting on a ${definition.base} attribute is not supported here`);
+      }
+      const about = { module: obj.module_id, absno: obj.absno, attribute: name, value };
+      // before the unchanged case: whether DOORS then fires is not settled either
+      if (!this._by_hand) {
+        this.refuse_triggered(about, "attribute", "save", `a value given to ${_repr(name)}`);
+      }
+      const unchanged = this.value(obj, name) === value && this.formatting(obj, name) === markup;
+      if (!unchanged) this.fire("pre", "attribute", "save", about);
+      this._write_value(obj, definition, value, markup);
+      if (!unchanged) this.fire("post", "attribute", "save", about);
+    });
+  }
+
+  _write_value(obj: Obj, definition: AttrDef, value: string, markup: string | null): void {
+      const name = definition.name;
       const old = this.value(obj, name);
       // an inherited value given again becomes the object's own
-      if (old === value && !(definition.inherit && !this.has_own_value(obj, name))) {
+      if (old === value && this.formatting(obj, name) === markup
+          && !(definition.inherit && !this.has_own_value(obj, name))) {
         // an object older than its attribute's default, given the value it showed:
         // note that it now has been given one
         if (definition.default && !definition.inherit && !this.has_own_value(obj, name)) {
@@ -1833,6 +1983,11 @@ export class Store {
       let held = data.values.get(obj.absno);
       if (!held) this._put(data.values, obj.absno, held = new Map());
       this._put(held, name, value);
+      let rich = data.rich.get(obj.absno);
+      if (markup !== null) {
+        if (!rich) this._put(data.rich, obj.absno, rich = new Map());
+        this._put(rich, name, markup);
+      } else if (rich) this._drop(rich, name);
       this.total_changes += 1;
       if (definition.history && definition.dates) {
         this._touch(obj, "modifyObject", name, old, value);
@@ -1846,7 +2001,6 @@ export class Store {
         this._assign(row, "modified_by", this.user);
         this._assign(row, "modified_on", this.now());
       }
-    });
   }
 
   // =====================================================================
@@ -2145,12 +2299,24 @@ export class Store {
     return this._decide(this.access_list(thing), rights);
   }
 
-  _decide(list: AccessEntry[], rights: number): "yes" | "no" | "unknown" {
+  // A name in a list that the directory does not hold may be a group the
+  // current user is in; one it does hold is settled by it.
+  _decide(list: AccessEntry[], rights: number, directory: Directory = this.directory): "yes" | "no" | "unknown" {
     const mine = list.find((e) => e.name === this.user);
     const has = (e: AccessEntry | undefined) => ((e?.rights ?? 0) & rights) === rights;
     if (mine) return has(mine) ? "yes" : "no";
     const everyone = list.find((e) => e.name === null);
-    const named = list.filter((e) => e.name !== null);
+    const group_of = (name: string | null) => directory.groups.find((g) => g.name === name);
+    const in_groups = list.filter((e) => group_of(e.name)?.members.includes(this.user));
+    // names that may or may not be groups of the current user's
+    const named = list.filter((e) => e.name !== null && !group_of(e.name)
+      && !directory.users.some((u) => u.name === e.name));
+    if (in_groups.length) {
+      const sure = in_groups.reduce((sum, e) => sum | e.rights, 0);
+      if ((sure & rights) === rights) return "yes";
+      const most = named.reduce((sum, e) => sum | e.rights, sure);
+      return (most & rights) === rights ? "unknown" : "no";
+    }
     // in none of the named groups, the entry for everyone else; in some, their rights together
     if (has(everyone) && named.every(has)) return "yes";
     const together = named.reduce((sum, e) => sum | e.rights, 0);
@@ -2194,21 +2360,103 @@ export class Store {
     if (thing === ROOT) throw new StoreError("the access rights of the database root cannot be changed here");
     const module = thing instanceof Obj ? thing.module_id : thing;
     this._writable(module);
-    if (list) {
-      if (!list.some((e) => e.rights & RIGHTS.control)) {
-        throw new StoreError("access rights in which nobody has control are not supported here");
-      }
-      if (this._decide(list, RIGHTS.read) !== "yes") {
-        throw new StoreError(`access rights under which ${this.user} might not be able to read are not supported `
-          + "here: nothing can be hidden");
-      }
-      const before = this._guarded;
-      this._guarded = true;
-      this._undo(() => { this._guarded = before; });
-    }
+    if (list) this._acceptable(list);
     this._assign(this._access_row(thing), "access", list);
     this._stamp(module);
     this.total_changes += 1;
+  }
+
+  // Refuse a list this suite cannot hold; from then on changes are checked.
+  _acceptable(list: AccessEntry[]): void {
+    if (!list.some((e) => e.rights & RIGHTS.control)) {
+      throw new StoreError("access rights in which nobody has control are not supported here");
+    }
+    if (this._decide(list, RIGHTS.read) !== "yes") {
+      throw new StoreError(`access rights under which ${this.user} might not be able to read are not supported `
+        + "here: nothing can be hidden");
+    }
+    const before = this._guarded;
+    this._guarded = true;
+    this._undo(() => { this._guarded = before; });
+  }
+
+  // For something with a list of its own inside a module or object (an
+  // attribute definition, its values, a view), both have to allow a change.
+  _require_both(own: AccessEntry[] | undefined, thing: Guarded, rights: number, doing: string, what: string): void {
+    if (!this._guarded) return;
+    if (!own) return this._require(thing, rights, doing);
+    const answer = this._decide(own, rights);
+    if (answer === "no") {
+      throw new StoreError(`no access: ${doing} needs ${rights_names(rights).join(", ")} access to ${what}, which `
+        + `${this.user} does not have`);
+    }
+    if (answer === "unknown") {
+      throw new StoreError(`cannot ${doing}: whether ${this.user} has access to ${what} depends on named groups; `
+        + `give ${this.user} an entry to say`);
+    }
+    if (this.may(thing, rights) !== "yes") {
+      throw new StoreError(`cannot ${doing}: ${what} allows it and what holds it does not, and which DOORS goes `
+        + "by is not documented");
+    }
+  }
+
+  attribute_access(module_id: number, name: string, part: AttrPart): { entries: AccessEntry[]; inherited: boolean } {
+    const row = this._modules.get(module_id)?.defs.get(name);
+    if (!row) throw new StoreError(`no attribute ${_repr(name)}`);
+    const own = row[_PART[part]];
+    return { entries: own ? own.map((e) => ({ ...e })) : this.access_list(module_id), inherited: !own };
+  }
+
+  // `change` gets the thing's own list (undefined while inherited) and answers
+  // the new one. Needs control access.
+  change_attribute_access(module_id: number, name: string, part: AttrPart,
+    change: (own: AccessEntry[] | undefined, effective: AccessEntry[]) => AccessEntry[] | undefined): void {
+    this.transaction(() => {
+      this._writable(module_id);
+      const { entries, inherited } = this.attribute_access(module_id, name, part);
+      this._require_control(entries, _repr(name));
+      const next = change(inherited ? undefined : entries, entries);
+      if (next) this._acceptable(next);
+      const data = this._modules.get(module_id)!;
+      const row = { ...data.defs.get(name)! };
+      if (next) row[_PART[part]] = next;
+      else delete row[_PART[part]];
+      this._put(data.defs, name, row);
+      this._stamp(module_id);
+      this.total_changes += 1;
+    });
+  }
+
+  _require_control(entries: AccessEntry[], what: string): void {
+    if (!this._guarded) return;
+    const answer = this._decide(entries, RIGHTS.control);
+    if (answer === "no") throw new StoreError(`no access: changing access rights needs control access to ${what}`);
+    if (answer === "unknown") {
+      throw new StoreError(`cannot change access rights: whether ${this.user} controls ${what} depends on named `
+        + "groups not known here");
+    }
+  }
+
+  view_access(module_id: number, name: string): { entries: AccessEntry[]; inherited: boolean } {
+    const view = this.views(module_id).get(name);
+    if (!view) throw new StoreError(`there is no saved view ${_repr(name)}`);
+    return { entries: view.access ?? this.access_list(module_id), inherited: !view.access };
+  }
+
+  change_view_access(module_id: number, name: string,
+    change: (own: AccessEntry[] | undefined, effective: AccessEntry[]) => AccessEntry[] | undefined): void {
+    this.transaction(() => {
+      this._writable(module_id);
+      const { entries, inherited } = this.view_access(module_id, name);
+      this._require_control(entries, `the view ${_repr(name)}`);
+      const next = change(inherited ? undefined : entries, entries);
+      if (next) this._acceptable(next);
+      const definition = this.views(module_id).get(name);
+      if (next) definition.access = next;
+      else delete definition.access;
+      this._put(this._modules.get(module_id)!.views, name, JSON.stringify(definition));
+      this.total_changes += 1;
+    });
   }
 
   // Give a thing a list of its own, the same as the one it inherits.
@@ -2266,6 +2514,173 @@ export class Store {
   // Not checked, and for no script: the interface may offer it.
   reset_access(thing: Guarded): void {
     this.transaction(() => this._set_access_list(thing, undefined));
+  }
+
+  // The lists held by attribute definitions and views.
+  _inner_lists(): AccessEntry[][] {
+    return [...this._modules.values()].flatMap((m) => [
+      ...[...m.defs.values()].flatMap((d) => [d.def_access, d.val_access].filter(Boolean) as AccessEntry[][]),
+      ...[...m.views.values()].flatMap((json) => { const held = JSON.parse(json).access; return held ? [held] : []; }),
+    ]);
+  }
+
+  // Replace the users and groups, as saveDirectory does.
+  set_directory(next: Directory): void {
+    this.transaction(() => {
+      if (this._guarded) {
+        const things = [...this._items.values(), ...[...this._modules.values()].flatMap((m) => [...m.objects.values()])];
+        for (const access of [...things.map((t) => t.access), ...this._inner_lists()]) {
+          if (access && this._decide(access, RIGHTS.read, next) !== "yes") {
+            throw new StoreError(`a change of groups under which ${this.user} might not be able to read something `
+              + "is not supported here: nothing can be hidden");
+          }
+        }
+      }
+      const old = this.directory;
+      this.directory = JSON.parse(JSON.stringify(next));
+      this._undo(() => { this.directory = old; });
+      this.total_changes += 1;
+    });
+  }
+
+  // =====================================================================
+  // Triggers
+  //
+  // The person's own actions at the interface fire them (by_hand). Whether a
+  // script, an import, or anything else the database does for itself fires a
+  // trigger is not documented, so those stop where one would apply.
+  // =====================================================================
+
+  by_hand<T>(work: () => T): T {
+    const before = this._by_hand;
+    this._by_hand = true;
+    try {
+      return work();
+    } finally {
+      this._by_hand = before;
+    }
+  }
+
+  // The triggers a thing holds itself.
+  own_triggers(at: number): Trigger[] {
+    return (this._items.get(at)?.triggers ?? []).map((row) => ({ at, row }));
+  }
+
+  // Those that reach a module: its own, and those of the projects around it.
+  _reaching(module_id: number): Trigger[] {
+    const module = this._items.get(module_id);
+    if (!module || module.baseline_of !== null) return [];
+    const out = this.own_triggers(module_id);
+    if (module.kind === "formal") {
+      for (let at = module.parent; at !== null; at = this._items.get(at)!.parent) out.push(...this.own_triggers(at));
+    } else {
+      // a link module is not a formal one: only a trigger naming no kind reaches it
+      for (let at = module.parent; at !== null; at = this._items.get(at)!.parent) {
+        out.push(...this.own_triggers(at).filter((t) => t.row.level === "module" && !t.row.formal));
+      }
+    }
+    return out;
+  }
+
+  triggers_for(module_id: number, level: string, event: string, absno: number | null = null,
+    attribute: string | null = null): Trigger[] {
+    return this._reaching(module_id).filter((t) => trigger_covers(t.row, level, event, absno, attribute));
+  }
+
+  // Stop, because something a trigger watches is about to happen by a path
+  // for which firing is not documented.
+  refuse_triggered(about: { module: number; absno?: number | null; attribute?: string | null },
+    level: string, event: string, doing: string): void {
+    const [found] = this.triggers_for(about.module, level, event, about.absno ?? null, about.attribute ?? null);
+    if (!found) return;
+    throw new StoreError(`${doing} is not offered here while the trigger ${_repr(found.row.name)} watches it: `
+      + "whether DOORS fires the trigger for this is not documented (it fires here for changes made in the "
+      + "interface)");
+  }
+
+  // Run the triggers for something the person is doing. A pre trigger that
+  // does not pass stops it.
+  fire(when: "pre" | "post", level: string, event: string, context: TriggerContext): void {
+    const found = this.triggers_for(context.module, level, event, context.absno, context.attribute)
+      .filter((t) => t.row.when === when);
+    if (!found.length) return;
+    const engine = Store.trigger_engine;
+    if (!engine) throw new StoreError("triggers are not offered here without the DXL engine");
+    found.sort((a, b) => a.row.priority - b.row.priority);
+    for (let i = 1; i < found.length; i++) {
+      if (found[i].row.priority === found[i - 1].row.priority) {
+        throw new StoreError(`the triggers ${_repr(found[i - 1].row.name)} and ${_repr(found[i].row.name)} have `
+          + "the same priority, and the order DOORS then runs them in is not documented");
+      }
+    }
+    const by_hand = this._by_hand;
+    this._by_hand = false; // what the trigger's own DXL does is a script's doing
+    try {
+      for (const [i, trigger] of found.entries()) {
+        if (!engine.run(this, trigger, context)) {
+          throw new StoreError(`the trigger ${_repr(trigger.row.name)} did not allow this`
+            + (i + 1 < found.length ? " (the triggers after it were not run here)" : ""));
+        }
+      }
+    } finally {
+      this._by_hand = by_hand;
+    }
+  }
+
+  // The person opens a module, or makes an object current. `work` is what
+  // happens between the pre and the post triggers.
+  user_event<T>(level: "module" | "object", event: "open" | "sync", module_id: number, absno: number | null,
+    work: () => T): T {
+    const context = { module: module_id, absno, attribute: null, value: null };
+    return this.transaction(() => this.by_hand(() => {
+      this.fire("pre", level, event, context);
+      const out = work();
+      this.fire("post", level, event, context);
+      return out;
+    }));
+  }
+
+  add_trigger(at: number, row: TriggerRow): void {
+    this.transaction(() => {
+      this._require(at, RIGHTS.modify, "create a trigger");
+      const held = this._items.get(at)!;
+      if (held.baseline_of !== null) throw new StoreError("a baseline cannot be changed");
+      const same = (o: TriggerRow) => o.name === row.name && o.level === row.level && o.when === row.when
+        && o.event === row.event && o.priority === row.priority && o.attribute === row.attribute
+        && o.absno === row.absno;
+      if (held.triggers?.some(same)) {
+        throw new StoreError(`there is already a trigger ${_repr(row.name)} like this; what defining it again does `
+          + "is not documented, so delete it first");
+      }
+      this._assign(held, "triggers", [...held.triggers ?? [], { ...row }]);
+      this._stamp(at);
+      this.total_changes += 1;
+    });
+  }
+
+  delete_trigger(at: number, row: TriggerRow): void {
+    this.transaction(() => {
+      this._require(at, RIGHTS.modify, "delete a trigger");
+      const held = this._items.get(at)!;
+      const left = (held.triggers ?? []).filter((o) => o !== row);
+      if (left.length === (held.triggers ?? []).length) throw new StoreError("that trigger no longer exists");
+      this._assign(held, "triggers", left.length ? left : undefined);
+      this._stamp(at);
+      this.total_changes += 1;
+    });
+  }
+
+  // Every item holding triggers, for loops and project files.
+  trigger_holders(): number[] {
+    return [...this._items.values()].filter((i) => i.baseline_of === null && i.triggers?.length).map((i) => i.id);
+  }
+
+  _unwatched(module_id: number, attribute: string, doing: string): void {
+    const found = this._reaching(module_id).find((t) => t.row.attribute === attribute);
+    if (found) {
+      throw new StoreError(`${doing} ${_repr(attribute)} is not offered here while the trigger `
+        + `${_repr(found.row.name)} names it`);
+    }
   }
 
   // =====================================================================
@@ -2406,6 +2821,10 @@ export class Store {
         throw new StoreError("only formal modules are copied here");
       }
       this._require(row.parent!, RIGHTS.create, "copy a module");
+      if (row.triggers?.length) {
+        throw new StoreError("copying a module that holds triggers is not offered here: whether the copy takes them "
+          + "is not documented");
+      }
       if (!name || name.includes("/") || name === "." || name === "..") {
         throw new StoreError(`not a usable name: ${_repr(name)}`);
       }
@@ -2707,6 +3126,7 @@ export class Store {
       this._undo(() => { to.kids.delete(parent); });
     }
     for (const [absno, held] of from.values) this._put(to.values, absno, new Map(held));
+    for (const [absno, held] of from.rich) this._put(to.rich, absno, new Map(held));
     this.total_changes += from.types.size + from.defs.size + from.module_values.size + from.objects.size;
     for (const held of from.values.values()) this.total_changes += held.size;
   }
@@ -2753,7 +3173,11 @@ export class Store {
     this.transaction(() => {
       this._writable(module_id);
       if (!name) throw new StoreError("a view needs a name");
-      this._require(module_id, _DATA_RIGHTS, "save a view");
+      // a view saved over keeps its own access rights
+      const old = this.views(module_id).get(name)?.access;
+      this._require_both(old, module_id, _DATA_RIGHTS, "save a view", `the view ${_repr(name)}`);
+      if (definition?.access) this._acceptable(definition.access);
+      else if (old) definition = { ...definition, access: old };
       const json = JSON.stringify(definition, (_, v) => (v instanceof Map ? Object.fromEntries(v) : v));
       this._put(this._data(module_id).views, name, json);
       this.total_changes += 1;
@@ -2763,7 +3187,10 @@ export class Store {
   delete_view(module_id: number, name: string): void {
     this.transaction(() => {
       const held = this._modules.get(module_id)?.views;
-      if (held?.has(name)) this._require(module_id, _DATA_RIGHTS, "delete a view");
+      if (held?.has(name)) {
+        this._require_both(this.views(module_id).get(name).access, module_id, _DATA_RIGHTS, "delete a view",
+          `the view ${_repr(name)}`);
+      }
       if (held && this._drop(held, name)) this.total_changes += 1;
     });
   }
@@ -2782,6 +3209,7 @@ export class Store {
       max_item: this._max_item,
       ...(this.default_link_name === null ? {} : { default_link_module: this.default_link_name }),
       ...(this._conf.size ? { conf: [...this._conf] } : {}),
+      ...(this.directory.users.length || this.directory.groups.length ? { directory: this.directory } : {}),
       items: [...this._items.values()],
       modules: [...this._modules].map(([id, m]) => ({
         id,
@@ -2790,6 +3218,8 @@ export class Store {
         module_values: [...m.module_values],
         objects: [...m.objects.values()],
         values: [...m.values].map(([absno, held]) => [absno, [...held]]),
+        ...([...m.rich.values()].some((held) => held.size)
+          ? { rich: [...m.rich].filter(([, held]) => held.size).map(([absno, held]) => [absno, [...held]]) } : {}),
         views: [...m.views],
         history: m.history.map((h) => [h.seq, h.when, h.who, h.absno, h.action, h.attribute, h.old, h.new,
                                        h.target_absno, h.object_count]),
@@ -2825,6 +3255,8 @@ export class Store {
       }
       for (const list of m.kids.values()) list.sort((a, b) => a.position - b.position || a.absno - b.absno);
       m.values = new Map(saved.values.map(([absno, held]: [number, [string, string][]]) => [absno, new Map(held)]));
+      m.rich = new Map((saved.rich ?? [])
+        .map(([absno, held]: [number, [string, string][]]) => [absno, new Map(held)]));
       m.views = new Map(saved.views);
       for (const [seq, when, who, absno, action, attribute, old, new_, target, count] of saved.history) {
         const entry = new History(seq, when, who, saved.id, absno, action, attribute, old, new_,
@@ -2843,8 +3275,9 @@ export class Store {
     store._max_item = Math.max(store._max_item, data.max_item ?? 0);
     store.default_link_name = data.default_link_module ?? null;
     store._conf = new Map(data.conf ?? []);
+    store.directory = data.directory ?? { users: [], groups: [] };
     store._guarded = [...store._items.values(), ...[...store._modules.values()].flatMap((m) => [...m.objects.values()])]
-      .some((row) => row.access !== undefined);
+      .some((row) => row.access !== undefined) || store._inner_lists().length > 0;
     store.total_changes = 0;
     return store;
   }

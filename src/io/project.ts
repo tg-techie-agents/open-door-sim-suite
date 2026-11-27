@@ -8,8 +8,9 @@
 // There are no files in the browser: dump_project returns the text and
 // load_project takes it.
 
-import { RIGHTS, STANDARD_ATTRIBUTES, Obj, StoreError, _ascii_digits, _cmp, _repr, _type_name,
+import { RIGHTS, ROOT, STANDARD_ATTRIBUTES, Obj, StoreError, _ascii_digits, _cmp, _repr, _type_name,
          rights_names } from "../store.ts";
+import { parse, plain_of } from "../rich.ts";
 import type { Store, Link, AttrDef } from "../store.ts";
 
 export const FORMAT = "opendoor-project", VERSION = 1;
@@ -23,11 +24,12 @@ export const BUILT_IN_TYPES: ReadonlySet<string> = new Set([
 
 export const STATE_KEYS: readonly string[] = [
   "description", "prefix", "types", "attributes", "module_values", "next_number", "objects"];
-export const OBJECT_KEYS: readonly string[] = ["number", "values", "deleted", "children", ...Object.keys(SHORTHAND)];
+export const OBJECT_KEYS: readonly string[] = ["number", "values", "rich", "deleted", "children",
+  ...Object.keys(SHORTHAND)];
 export const STEP_KEYS: Readonly<Record<string, readonly string[]>> = {
   baseline: ["module", "annotation", "major", "suffix"],
-  set: ["object", "values", ...Object.keys(SHORTHAND)],
-  add: ["module", "under", "after", "before", "values", ...Object.keys(SHORTHAND)],
+  set: ["object", "values", "rich", ...Object.keys(SHORTHAND)],
+  add: ["module", "under", "after", "before", "values", "rich", ...Object.keys(SHORTHAND)],
   delete: ["object"],
   link: ["module", "from", "to"],
   unlink: ["module", "from", "to"],
@@ -379,15 +381,73 @@ function _written_access(store: Store): any[] {
     add(item.id, { path: store.path(item.id) });
     if (item.kind !== "formal") continue;
     for (const obj of store.objects(item.id, true)) add(obj, { path: store.path(item.id), object: obj.absno });
+    for (const { name } of store.attributes(item.id, null)) {
+      for (const part of ["definition", "values"] as const) {
+        const { entries, inherited } = store.attribute_access(item.id, name, part);
+        if (inherited) continue;
+        out.push({ path: store.path(item.id), attribute: name, part,
+          entries: entries.map((e) => ({ name: e.name, rights: rights_names(e.rights) })) });
+      }
+    }
   }
   return out;
+}
+
+// Users and groups, added to those already there.
+function _load_directory(store: Store, data: any): void {
+  const held = _get(data, "directory");
+  if (held === null) return;
+  _only(held, ["users", "groups"], "the directory");
+  const next = { users: [...store.directory.users], groups: [...store.directory.groups] };
+  const taken = (name: string) => [...next.users, ...next.groups].some((o) => o.name === name);
+  for (const user of _iter(_get(held, "users", []))) {
+    _only(user, ["name", "uid"], "a user");
+    const name = _column(_key(user, "name"));
+    if (taken(name)) throw new StoreError(`directory: ${_repr(name)} already exists`);
+    next.users.push({ name, uid: _column(_key(user, "uid")) });
+  }
+  for (const group of _iter(_get(held, "groups", []))) {
+    _only(group, ["name", "members"], "a group");
+    const name = _column(_key(group, "name"));
+    if (taken(name)) throw new StoreError(`directory: ${_repr(name)} already exists`);
+    next.groups.push({ name, members: _iter(_get(group, "members", [])).map((m) => _column(m)) });
+  }
+  store.set_directory(next);
+}
+
+// Triggers, by the path of what holds them ("/": the database).
+function _written_triggers(store: Store): any[] {
+  return store.trigger_holders().flatMap((at) => store.own_triggers(at)
+    .map(({ row }) => ({ path: store.path(at), ...row })));
+}
+
+// Loaded after everything they might watch has been put in place.
+function _load_triggers(store: Store, data: any): void {
+  const words = ["path", "name", "level", "when", "event", "word", "priority", "dxl"];
+  for (const entry of _iter(_get(data, "triggers", []))) {
+    _only(entry, [...words, "formal", "attribute", "absno"], "a trigger");
+    const path = _column(_key(entry, "path"));
+    const at = path === "/" ? ROOT : store.find(path);
+    if (at === null) throw new StoreError(`triggers: nothing at ${path}`);
+    const row: any = {};
+    for (const word of words.slice(1)) row[word] = _key(entry, word);
+    for (const word of ["formal", "attribute", "absno"]) {
+      if (_get(entry, word) !== null) row[word] = _get(entry, word);
+    }
+    const kinds: Record<string, string> = { module: "open", object: "sync", attribute: "save" };
+    if (!Object.hasOwn(kinds, row.level) || kinds[row.level] !== row.event || !["pre", "post"].includes(row.when)
+        || typeof row.dxl !== "string" || !Number.isInteger(row.priority)) {
+      throw new StoreError(`triggers: ${_repr(String(row.name))} is not a trigger offered here`);
+    }
+    store.add_trigger(at, row);
+  }
 }
 
 // Applied last, so that no restriction stands in the way of loading the rest,
 // and deepest first, so that none stands in the way of the others.
 function _load_access(store: Store, data: any): void {
   const entries = _iter(_get(data, "access", [])).map((entry) => {
-    _only(entry, ["path", "object", "entries"], "an access entry");
+    _only(entry, ["path", "object", "attribute", "part", "entries"], "an access entry");
     const path = _column(_key(entry, "path")), number = _get(entry, "object");
     const item = store.find(path);
     const thing = item === null || number === null ? item : store.object(item, Number(_column(number)));
@@ -402,9 +462,17 @@ function _load_access(store: Store, data: any): void {
       return { name: _get(e, "name") === null ? null : _column(_get(e, "name")), rights };
     });
     const depth = path.split("/").length + (thing instanceof Obj ? 1000 + store.level(thing) : 0);
-    return { thing, list, depth };
+    const attribute = _get(entry, "attribute"), part = _get(entry, "part");
+    if (attribute !== null && part !== "definition" && part !== "values") {
+      throw new StoreError(`access: ${path}: part is "definition" or "values"`);
+    }
+    // attribute lists go before their module's, which could forbid setting them
+    return { thing, list, depth: attribute === null ? depth : depth + 0.5, attribute, part };
   });
-  for (const { thing, list } of entries.sort((a, b) => b.depth - a.depth)) store.restore_access(thing, list);
+  for (const { thing, list, attribute, part } of entries.sort((a, b) => b.depth - a.depth)) {
+    if (attribute === null) store.restore_access(thing, list);
+    else store.change_attribute_access(thing as number, _column(attribute), part, () => list);
+  }
 }
 
 // Everything a baseline freezes, apart from links.
@@ -439,6 +507,7 @@ function _state(store: Store, module_id: number): Record<string, any> {
     .map((a) => [a.name, written(a.name, store.module_value(module_id, a.name))]));
 
   const held = store.values(module_id, true);
+  const formattings = store.formattings(module_id, true);
   const entries = new Map<number, Record<string, any>>(), tree: Record<string, any>[] = [];
   for (const obj of store.objects(module_id, true)) {
     const mine = held.get(obj.absno) ?? new Map<string, string>();
@@ -454,6 +523,17 @@ function _state(store: Store, module_id: number): Record<string, any> {
       if (a.inherit ? mine.has(a.name) : value || a.default) values.push([a.name, written(a.name, value)]);
     }
     if (values.length) entry.values = Object.fromEntries(values);
+    // a formatted value is written once, as markup
+    const rich = formattings.get(obj.absno);
+    if (rich) {
+      for (const name of rich.keys()) {
+        const short = Object.keys(SHORTHAND).find((key) => SHORTHAND[key] === name);
+        if (short) delete entry[short];
+        else delete entry.values?.[name];
+      }
+      if (entry.values && !Object.keys(entry.values).length) delete entry.values;
+      entry.rich = Object.fromEntries(rich);
+    }
     if (store.is_deleted(obj)) entry.deleted = true;
     entries.set(obj.absno, entry);
     const parent = store.parent_object(obj);
@@ -606,6 +686,9 @@ export function dump_project(store: Store): string {
   if (baseline_sets.length) data.baseline_sets = baseline_sets;
   const access = _written_access(store);
   if (access.length) data.access = access;
+  if (store.directory.users.length || store.directory.groups.length) data.directory = store.directory;
+  const triggers = _written_triggers(store);
+  if (triggers.length) data.triggers = triggers;
   return JSON.stringify(data, null, 2) + "\n";
 }
 
@@ -638,7 +721,7 @@ export function load_project_data(store: Store, data: any, path: string = "proje
     throw new StoreError(`${path} is not a project file ("format": "${FORMAT}", "version": ${VERSION})`);
   }
   _only(data, ["format", "version", "folders", "modules", "link_modules", "links", "steps", "created_on", "access",
-    "baseline_sets"],
+    "baseline_sets", "triggers", "directory"],
     path);
   try {
     store.transaction(() => _load(store, data));
@@ -663,6 +746,8 @@ function _load(store: Store, data: any): void {
     }
   });
   _load_sets(store, data);
+  _load_triggers(store, data);
+  _load_directory(store, data);
   _load_access(store, data);
 }
 
@@ -806,9 +891,9 @@ function _load_content(store: Store, data: any): Map<string, number> {
   return ids;
 }
 
-type _Flat = [number, number | null, Map<string, string>, boolean];
+type _Flat = [number, number | null, Map<string, string>, boolean, Map<string, string>];
 
-// [[number, parent number, values, deleted]] in document order.
+// [[number, parent number, values, deleted, markup of the formatted ones]] in document order.
 function _flatten(state: any, where: string): _Flat[] {
   const used = new Set<number>();
   let free = 0;
@@ -838,7 +923,7 @@ function _flatten(state: any, where: string): _Flat[] {
         free += 1;
         number = free;
       }
-      out.push([number, parent, _values(entry), _truthy(_get(entry, "deleted"))]);
+      out.push([number, parent, _values(entry), _truthy(_get(entry, "deleted")), _rich(entry)]);
       visit(_get(entry, "children", []), number);
     }
   };
@@ -860,7 +945,30 @@ function _values(entry: any): Map<string, string> {
   for (const [key, name] of Object.entries(SHORTHAND)) {
     if (Object.hasOwn(entry, key)) values.set(name, _text(entry[key]));
   }
+  for (const [name, markup] of _rich(entry)) {
+    if (values.has(name)) throw new StoreError(`${name} is given both as text and as rich text`);
+    try {
+      values.set(name, plain_of(parse(markup)));
+    } catch (error) {
+      throw new StoreError(`${name}: ${(error as Error).message}`);
+    }
+  }
   return values;
+}
+
+function _rich(entry: any): Map<string, string> {
+  return new Map(_items(_get(entry, "rich", {})).map(([name, markup]) => {
+    if (typeof markup !== "string") throw new StoreError(`${name}: rich text is its markup, as text`);
+    return [name, markup];
+  }));
+}
+
+function _write(store: Store, obj: Obj, values: Map<string, string>, rich: Map<string, string>): void {
+  for (const [name, value] of values) {
+    const markup = rich.get(name);
+    if (markup === undefined) store.set_value(obj, name, value);
+    else store.set_rich(obj, name, markup);
+  }
 }
 
 // Bring a module (new, or holding an earlier state) to `state`, links aside.
@@ -912,12 +1020,12 @@ function _apply(store: Store, module: number, state: any, where: string): void {
   const shorthand = Object.values(SHORTHAND);
   const definitions = store.attributes(module).filter((a) => !shorthand.includes(a.name));
   const blank = [...definitions.filter((a) => !a.default && !a.dxl && !a.inherit).map((a) => a.name), ...shorthand];
-  for (let [number, , values] of flat) {
+  for (let [number, , values, , rich] of flat) {
     const obj = new Obj(module, number);
     if (existing.has(number)) { // an attribute the state leaves out was emptied
       values = new Map([...blank.map((name) => [name, ""] as [string, string]), ...values]);
     }
-    for (const [name, value] of values) store.set_value(obj, name, value);
+    _write(store, obj, values, rich);
   }
   for (let i = flat.length - 1; i >= 0; i--) {
     if (flat[i][3]) store.delete_object(new Obj(module, flat[i][0]));
@@ -1110,14 +1218,17 @@ function _step(store: Store, step: any, ids: Map<string, number>): void {
                           _column(_get(step, "suffix", "")));
   } else if (op === "set") {
     const target = obj(_key(step, "object"));
-    for (const [name, value] of _values(step)) store.set_value(target, name, value);
+    _write(store, target, _values(step), _rich(step));
   } else if (op === "add") {
     const place: Record<string, Obj> = {};
     for (const [key, argument] of [["under", "parent"], ["after", "after"], ["before", "before"]]) {
       if (_get(step, key) !== null) place[argument] = obj(step[key]);
     }
     const found = module();
-    store.create_object(found, place.parent ?? null, place.after ?? null, place.before ?? null, _values(step));
+    const values = _values(step), rich = _rich(step);
+    const made = store.create_object(found, place.parent ?? null, place.after ?? null, place.before ?? null,
+                                     new Map([...values].filter(([name]) => !rich.has(name))));
+    _write(store, made, new Map([...values].filter(([name]) => rich.has(name))), rich);
   } else if (op === "delete") {
     store.delete_object(obj(_key(step, "object")));
   } else if (op === "link") {

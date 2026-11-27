@@ -6,6 +6,7 @@
 // terminating the worker. Binary files travel as base64.
 
 import { ROOT, RIGHTS, SYSTEM_ATTRIBUTES, AttrDxlError, Obj, Store, StoreError, rights_names } from "../store.ts";
+import { checked_doc, markup_of, parse, plain_of, slice, splice } from "../rich.ts";
 import { DxlError, coverage, layout, run } from "../dxl/index.ts";
 import type { DialogSession } from "../dxl/index.ts";
 import type { DialogEvent, Progress } from "../dxl/lib/dialogs.ts";
@@ -183,6 +184,7 @@ export class Api {
     const attributes: any[] = Array.from(store.attributes(module, null));
     const system = Array.from(SYSTEM_ATTRIBUTES as readonly string[]).filter((n) => n !== "Absolute Number");
     const values: any = store.values(module);
+    const formattings = store.formattings(module);
     const numbers: any = store.numbers(module);
     const prefix = store.prefix(module);
     const levels = new Map<number, number>();
@@ -212,12 +214,18 @@ export class Api {
         absno: obj.absno, id: `${prefix}${obj.absno}`, level,
         parent: parent ? parent.absno : null, deleted,
         number: numbers.get(obj.absno) ?? "", values: held,
+        // the formatted values among them, as paragraphs of styled runs
+        rich: Object.fromEntries([...formattings.get(obj.absno) ?? []].map(([name, markup]) => [name, parse(markup)])),
         out: links(obj, true), in: links(obj, false),
       });
     }
     const baseline = store.baseline_of(module);
     const owner = baseline ? baseline.module_id : module;
+    // what the page must tell the engine about, for the triggers
+    const watched = { open: store.triggers_for(module, "module", "open").length > 0,
+      sync: store._reaching(module).some((t) => t.row.level === "object") };
     return {
+      watched,
       module: {
         id: module, name: item.name, path: store.path(module), prefix,
         description: item.description, owner, baseline: baseline ? baseline.label : null,
@@ -286,19 +294,30 @@ export class Api {
 
   // `made_own` names the inherited cells that now hold a value of their own. An
   // inherited cell given back unchanged is left inherited.
-  op_set_values({ module, absno, values }: any): { made_own: string[] } | void {
+  // `values` are plain text and take away any formatting, unless the text is
+  // unchanged; `rich` gives values as paragraphs of styled runs.
+  op_set_values({ module, absno, values = {}, rich = {} }: any): { made_own: string[] } | void {
     const obj = this._existing(module, absno);
     const made_own: string[] = [];
-    this.store.transaction(() => {
+    // the person's own change: attribute triggers fire for it
+    this.store.by_hand(() => this.store.transaction(() => {
       for (const [name, value] of Object.entries(values)) {
         if (typeof value !== "string") throw new StoreError(`${name}: the value must be text`);
         const text = value.replaceAll("\r\n", "\n");
         const inherited = this._inherited(obj, name);
-        if (inherited && this.store.value(obj, name) === text) continue;
+        if ((inherited || this.store.formatting(obj, name) !== null) && this.store.value(obj, name) === text) continue;
         this.store.set_value(obj, name, text);
         if (inherited) made_own.push(name);
       }
-    });
+      for (const [name, given] of Object.entries(rich)) {
+        const doc = checked_doc(given);
+        const markup = markup_of(doc);
+        const inherited = this._inherited(obj, name);
+        if (inherited && this.store.rich_value(obj, name) === markup) continue;
+        this.store.set_rich(obj, name, markup);
+        if (inherited) made_own.push(name);
+      }
+    }));
     if (made_own.length) return { made_own };
   }
 
@@ -381,7 +400,11 @@ export class Api {
   // and `remove` change those choices and leave each object's others alone.
   // `changes` can be given to restore_values; an inherited cell that now holds a
   // value of its own is not among them, as that cannot be undone.
-  op_set_value_many({ module, absnos, name, value = null, add = null, remove = null }: any): any {
+  op_set_value_many(args: any): any {
+    return this.store.by_hand(() => this._set_value_many(args));
+  }
+
+  _set_value_many({ module, absnos, name, value = null, add = null, remove = null }: any): any {
     const store = this.store;
     const id = this._formal(module).id;
     const definition = store.attribute(id, name);
@@ -390,7 +413,7 @@ export class Api {
     const choosing = add !== null || remove !== null;
     if (choosing && !definition.multi) throw new StoreError(`${name} holds one value`);
     if (!choosing && typeof value !== "string") throw new StoreError(`${name}: the value must be text`);
-    const changes: Array<{ absno: number; name: string; before: string; after: string }> = [];
+    const changes: Array<{ absno: number; name: string; before: string; after: string; rich?: string }> = [];
     let changed = 0, made_own = 0, deleted = 0;
     store.transaction(() => {
       for (const absno of absnos) {
@@ -406,10 +429,11 @@ export class Api {
         }
         if (next === before) continue;
         const inherited = this._inherited(obj, name);
+        const rich = store.formatting(obj, name) ?? undefined;
         store.set_value(obj, name, next);
         changed++;
         if (inherited) made_own++;
-        else changes.push({ absno: obj.absno, name, before, after: store.value(obj, name) });
+        else changes.push({ absno: obj.absno, name, before, after: store.value(obj, name), rich });
       }
     });
     return { changed, made_own, deleted, changes };
@@ -572,8 +596,9 @@ export class Api {
     // Read everything first: it may be pasted inside itself.
     const known = new Map(store.attributes(module).map((a) => [a.name, a]));
     const values: any = store.values(from[0].module_id, true); // inherited values stay inherited
+    const formattings = store.formattings(from[0].module_id, true);
     const skipped = new Set<string>();
-    type Branch = { values: Map<string, string>; children: Branch[] };
+    type Branch = { values: Map<string, string>; rich: Map<string, string>; children: Branch[] };
     const read = (obj: Obj): Branch => {
       const held = new Map<string, string>();
       for (const [name, value] of (values.get(obj.absno) ?? []) as Iterable<[string, string]>) {
@@ -582,13 +607,16 @@ export class Api {
         if (!target || (target.base === "Enumeration" && !value.split("\n").every((v) => target.values.includes(v)))) skipped.add(name);
         else held.set(name, value);
       }
-      return { values: held, children: !hierarchy ? [] : store.child_objects(obj.module_id, obj.absno).filter((o) => !store.is_deleted(o)).map(read) };
+      const rich = new Map([...formattings.get(obj.absno) ?? []].filter(([name]) => held.has(name)
+        && ["String", "Text"].includes(known.get(name)!.base)));
+      return { values: held, rich, children: !hierarchy ? [] : store.child_objects(obj.module_id, obj.absno).filter((o) => !store.is_deleted(o)).map(read) };
     };
     const branches = from.map(read);
     let count = 0;
     return store.transaction(() => {
       const make = (node: Branch, up: Obj | null, behind: Obj | null): Obj => {
         const made = store.create_object(module, up, behind, null, node.values);
+        for (const [name, markup] of node.rich) store.set_rich(made, name, markup);
         count++;
         for (const child of node.children) make(child, made, null);
         return made;
@@ -612,7 +640,9 @@ export class Api {
       throw new StoreError(`${store.identifier(obj)} needs both a heading and text to split them`);
     }
     return store.transaction(() => {
+      const markup = store.formatting(obj, "Object Heading");
       const made = store.create_object(obj.module_id, null, null, obj, new Map([["Object Heading", heading]]));
+      if (markup !== null) store.set_rich(made, "Object Heading", markup);
       const kids = store.child_objects(obj.module_id, obj.absno);
       store.set_value(obj, "Object Heading", "");
       store.move_object(obj, made);
@@ -631,10 +661,19 @@ export class Api {
     const obj = this._existing(module, absno);
     const parts = store.value(obj, "Object Text").split(/\n[ \t]*\n/).map((p) => p.replace(/^\n+|\s+$/g, "")).filter(Boolean);
     if (parts.length < 2) throw new StoreError(`${store.identifier(obj)} has no blank line in its Object Text to split at`);
+    const markup = store.formatting(obj, "Object Text");
+    const whole = store.value(obj, "Object Text");
+    let from = 0;
     store.transaction(() => {
-      store.set_value(obj, "Object Text", parts[0]);
       let last = obj;
-      for (const text of parts.slice(1)) last = store.create_object(obj.module_id, null, last, null, new Map([["Object Text", text]]));
+      parts.forEach((text, i) => {
+        if (i) last = store.create_object(obj.module_id, null, last, null, new Map([["Object Text", text]]));
+        else if (markup === null) store.set_value(obj, "Object Text", text);
+        if (markup === null) return;
+        from = whole.indexOf(text, from);
+        store.set_rich(last, "Object Text", markup_of(slice(parse(markup), from, from + text.length)));
+        from += text.length;
+      });
     });
   }
 
@@ -642,7 +681,8 @@ export class Api {
     return { purged: this.store.purge(this._formal(module).id) };
   }
 
-  // Plain-text replacement in the String and Text attributes of the objects named.
+  // Replacement in the text of the String and Text attributes of the objects
+  // named; what a match is replaced with takes the formatting where it began.
   // Replaces in Object Heading and Object Text, or with `all_text` in every
   // String and Text attribute; without `absnos`, in every object of the module.
   op_replace_text({ module: module_arg, absnos = null, find, replace, match_case = false, all_text = false }: any): any {
@@ -652,7 +692,7 @@ export class Api {
     const pattern = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), match_case ? "g" : "gi");
     const names = store.attributes(module).filter((a) => !a.dxl && (a.base === "String" || a.base === "Text")
       && (all_text || a.name === "Object Heading" || a.name === "Object Text")).map((a) => a.name);
-    const changes: Array<{ absno: number; name: string; before: string; after: string }> = [];
+    const changes: Array<{ absno: number; name: string; before: string; after: string; rich?: string }> = [];
     let count = 0;
     store.transaction(() => {
       for (const absno of absnos ?? store.objects(module).map((o) => o.absno)) {
@@ -663,9 +703,18 @@ export class Api {
           let found = 0;
           const after = before.replace(pattern, () => { found++; return String(replace); });
           if (!found || after === before) continue;
-          store.set_value(obj, name, after);
+          const rich = store.formatting(obj, name) ?? undefined;
+          if (rich === undefined) store.set_value(obj, name, after);
+          else {
+            let doc = parse(rich);
+            for (const match of [...before.matchAll(pattern)].reverse()) {
+              doc = splice(doc, match.index, match.index + match[0].length, String(replace));
+            }
+            if (plain_of(doc) !== after) throw new StoreError(`${name}: this replacement is not supported`);
+            store.set_rich(obj, name, markup_of(doc));
+          }
           count += found;
-          changes.push({ absno: obj.absno, name, before, after: store.value(obj, name) });
+          changes.push({ absno: obj.absno, name, before, after: store.value(obj, name), rich });
         }
       }
     });
@@ -676,9 +725,11 @@ export class Api {
   op_restore_values({ module, changes }: any): any {
     let skipped = 0;
     this.store.transaction(() => {
-      for (const { absno, name, before, after } of changes) {
+      for (const { absno, name, before, after, rich, doc } of changes) {
         const obj = this.store.object(int(module), int(absno));
         if (obj === null || this.store.value(obj, name) !== after) skipped++;
+        else if (typeof rich === "string") this.store.set_rich(obj, name, rich);
+        else if (doc) this.store.set_rich(obj, name, markup_of(checked_doc(doc)));
         else this.store.set_value(obj, name, before);
       }
     });
@@ -811,6 +862,7 @@ export class Api {
     const store = this.store;
     const id = int(module);
     if (store.item(id).kind !== "link") throw new StoreError(`${store.item(id).name} is not a link module`);
+    store.refuse_triggered({ module: id }, "module", "open", "showing a link module");
     const links: any[] = [];
     const held = new Map<number, any>();
     const end = (obj: Obj) => {
@@ -851,6 +903,23 @@ export class Api {
 
   op_set_default_link({ name }: any): void {
     this.store.set_default_link_name(String(name));
+  }
+
+  // -- triggers ----------------------------------------------------------------
+
+  // The person has opened a module, or (with `absno`) made an object current.
+  op_user_event({ module, absno = null }: any): { note: string | null } {
+    const id = int(module);
+    const level = absno === null ? "module" : "object";
+    this.store.user_event(level, absno === null ? "open" : "sync", id, absno === null ? null : int(absno), () => {});
+    const unsettled = absno === null && this.store._reaching(id).some((t) => t.row.level === "object");
+    return { note: unsettled ? "Sync triggers did not run for the object current on opening: whether DOORS "
+      + "runs them then is not documented." : null };
+  }
+
+  // What triggers have printed since this was last asked.
+  op_trigger_output(_args: any = {}): { text: string } {
+    return { text: this.store.trigger_output.splice(0).join("") };
   }
 
   // -- access rights -----------------------------------------------------------

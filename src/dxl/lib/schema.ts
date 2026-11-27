@@ -3,6 +3,7 @@
 // A LinkModuleDescriptor handle names a folder's descriptor by its source and
 // target, so it always shows the descriptor as it is now.
 
+import { RIGHTS } from "../../store.ts";
 import type { LinkDescriptor } from "../../store.ts";
 import type { Library } from "../registry.ts";
 import { Fault } from "../runtime.ts";
@@ -140,6 +141,11 @@ function definition_of(rt: Runtime, module_id: any, view: any): ViewDefinition {
   return { settings: { ...saved.settings } };
 }
 
+const OTHER_SETTINGS = ["useAncestors", "useDescendants", "useCurrent", "useSelection", "useOutlining",
+  "useCompression", "useLevel", "useShowDeleted", "useShowExplorer", "useShowLinks", "useShowLinkIndicators",
+  "useShowPictures", "useShowTables", "useFilterTables", "useGraphics", "useGraphicsColumn", "useTooltipColumn",
+  "useAutoIndentation", "useWindows"];
+
 function register_view_definitions(lib: Library): void {
   lib.type("ViewDef");
   lib.add("get", ["View"], "ViewDef", (rt: Runtime, v: any) => definition_of(rt, current_module(rt), v));
@@ -150,6 +156,11 @@ function register_view_definitions(lib: Library): void {
   };
   // only with both arguments: `create(m)` alone is how an object is made
   lib.add("create", ["Module", "bool"], "ViewDef", create);
+  // a view saved from either gives the one user here full access, so they differ only in DOORS
+  for (const name of ["createPublic", "createPrivate"]) {
+    lib.add(name, [], "ViewDef", (rt: Runtime) => create(rt, current_module(rt), false));
+    lib.add(name, ["Module", "bool"], "ViewDef", create);
+  }
 
   for (const flag of ["useColumns", "useFiltering", "useSorting"] as const) {
     lib.add(flag, ["ViewDef"], "bool", (rt: Runtime, d: any) => {
@@ -161,6 +172,21 @@ function register_view_definitions(lib: Library): void {
     });
     lib.add(flag, ["ViewDef", "bool"], "void",
       (rt: Runtime, d: any, on: boolean) => { rt.need(d, "ViewDef").settings[flag] = on; });
+  }
+  // The other settings of the dialog's Advanced tab. This suite holds nothing
+  // for them, so a view is saved only with each of them off (or never given).
+  for (const flag of OTHER_SETTINGS) {
+    lib.add(flag, ["ViewDef"], "bool", (rt: Runtime, d: any) => {
+      const value = (rt.need(d, "ViewDef").settings as Record<string, boolean>)[flag];
+      if (value === undefined) {
+        throw new Fault(`${flag}: this view definition has not been given it, and the DOORS default is not documented`);
+      }
+      return value;
+    });
+    lib.add(flag, ["ViewDef", "bool"], "void",
+      (rt: Runtime, d: any, on: boolean) => {
+        (rt.need(d, "ViewDef").settings as Record<string, boolean>)[flag] = on;
+      });
   }
   lib.add("save", ["View", "ViewDef"], "void",
     (rt: Runtime, v: any, d: any) => save_view_in(rt, current_module(rt), v, rt.need(d, "ViewDef").settings));
@@ -179,9 +205,17 @@ function register_rights(lib: Library): void {
     return true;
   };
   for (const what of ["Create", "Control", "Delete"]) {
-    for (const part of ["Def", "Val"]) {
-      lib.add(`can${what}${part}`, ["AttrDef"], "bool", (rt: Runtime, d: any) =>
-        user_made(SYSTEM_NAMES.has(rt.need(d, "AttrDef").name), "AttrDef")(rt, d));
+    for (const [part, held] of [["Def", "definition"], ["Val", "values"]] as const) {
+      lib.add(`can${what}${part}`, ["AttrDef"], "bool", (rt: Runtime, d: any) => {
+        user_made(SYSTEM_NAMES.has(rt.need(d, "AttrDef").name), "AttrDef")(rt, d);
+        const right = RIGHTS[what.toLowerCase() as "create" | "control" | "delete"];
+        const answer = rt.store._guarded
+          ? rt.store._decide(rt.store.attribute_access(d.module_id, d.name, held).entries, right) : "yes";
+        if (answer === "unknown") {
+          throw new Fault(`can${what}${part}: the answer depends on which named groups ${rt.store.user} belongs to`);
+        }
+        return answer === "yes";
+      });
     }
     lib.add(`can${what}`, ["AttrType"], "bool", (rt: Runtime, t: any) =>
       user_made(SYSTEM_TYPES.includes(rt.need(t, "AttrType").name), "AttrType")(rt, t));
