@@ -182,6 +182,12 @@
   // DOORS from the desktop: open it if it is not, and with `raise` bring it up.
   window.opendoorShow = async (raise) => {
     if (!windows.size) return opened();
+    const all = [...windows.values()];
+    // Nothing in sight: bring back what was put away, the last used in front.
+    if (all.every((w) => w.node.classList.contains("min"))) {
+      all.forEach((w) => w.node.classList.remove("min"));
+      return front(all.sort((a, b) => b.z - a.z)[0]);
+    }
     if (!raise) return;
     if (!windows.has(0)) create(0, "Database Explorer", { x: ICONS, y: 0, w: EXPLORER_WIDTH, h: desk.clientHeight });
     const explorer = windows.get(0);
