@@ -1,0 +1,14 @@
+// Layout DXL column: the parent items each object satisfies.
+// In DOORS: new column, Layout DXL. Change the setting.
+string PARENT_LINKS = "/Greenhouse Demo/satisfies"
+
+Link l
+for l in obj->PARENT_LINKS do read(fullName(target(l)), false)
+
+for l in obj->PARENT_LINKS do {
+    Object linked = target(l)
+    if (null linked) continue
+    if (isDeleted linked) continue
+    string body = linked."Object Text" ""
+    display(identifier(linked) "  " body)
+}

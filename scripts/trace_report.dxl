@@ -1,0 +1,154 @@
+// Traceability verification report.
+// For each requirement in the listed modules: which items are linked to it,
+// their status, and a verdict. Writes a CSV file. Reads only; changes nothing.
+
+pragma runLim, 0    // large modules would otherwise hit DOORS's time limit
+
+// ==== settings: change these ================================================
+string MODULES[] = {"/Greenhouse Demo/System Requirements"}  // full module paths
+string OUTPUT_FILE = "trace_report.csv"   // give a full path inside DOORS
+string LINK_MODULE = "/Greenhouse Demo/verifies"   // "*" for every link module
+string LINK_DIRECTION = "in"      // "in": tests link to requirements; "out": the reverse
+string STATUS_ATTRIBUTE = "Verification Status"    // "" means a link is enough
+string PASS_VALUE = "Passed"
+// ============================================================================
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+
+if (LINK_DIRECTION != "in" && LINK_DIRECTION != "out") {
+    print "LINK_DIRECTION must be \"in\" or \"out\"\n"
+    halt
+}
+
+Stream out = write OUTPUT_FILE
+out << "Module,Requirement,Requirement Text,Verdict,Linked Item,Linked Module,Linked Status\n"
+
+int requirements = 0, unlinked = 0, notPassed = 0, good = 0, unopened = 0
+
+// The requirement being reported.
+bool writing = false
+int links = 0, failing = 0
+string prefix = "", verdict = ""
+
+// Called once to count a linked item, then again to write its row.
+void visit(Object linked) {
+    bool live = false
+    if (!null linked) live = !isDeleted(linked)
+    if (live) {
+        string status = ""
+        if (STATUS_ATTRIBUTE != "") {
+            AttrDef definition = find(module(linked), STATUS_ATTRIBUTE)
+            if (null definition) {
+                status = "(no such attribute)"
+            } else {
+                status = linked.STATUS_ATTRIBUTE ""
+            }
+        }
+        if (writing) {
+            out << prefix csv(verdict) "," csv(identifier(linked)) "," csv(fullName(module(linked))) "," csv(status) "\n"
+        } else {
+            links++
+            if (status != PASS_VALUE) failing++
+        }
+    }
+}
+
+void eachLink(Object o) {
+    Link l
+    if (LINK_DIRECTION == "in") {
+        for l in o<-LINK_MODULE do visit(source(l))
+    } else {
+        for l in o->LINK_MODULE do visit(target(l))
+    }
+}
+
+// DOORS only sees a link's far end once the module that holds it is open.
+void openModule(ModName_ other) {
+    if (null read(fullName(other), false)) {
+        print "WARNING: cannot open " fullName(other) "\n"
+        unopened++
+    }
+}
+
+void openLinked(Object o) {
+    ModName_ other
+    Link l
+    if (LINK_DIRECTION == "in") {
+        for other in o<-LINK_MODULE do openModule(other)
+    } else {
+        for l in o->LINK_MODULE do openModule(target(l))
+    }
+}
+
+int m
+for (m = 0; m < sizeof(MODULES); m++) {
+    Module reqs = read(MODULES[m], false)
+    if (null reqs) {
+        print "cannot open " MODULES[m] "\n"
+        halt
+    }
+
+    Object o
+    for o in entire(reqs) do {
+        if (isDeleted o) continue
+        if (table(o) || row(o) || cell(o)) continue    // tables are not reported
+        string body = o."Object Text"
+        if (body == "") continue                       // headings are not requirements
+
+        openLinked(o)
+        links = 0
+        failing = 0
+        writing = false
+        eachLink(o)
+
+        requirements++
+        if (links == 0) {
+            verdict = "No link"
+            unlinked++
+        } else if (STATUS_ATTRIBUTE == "") {
+            verdict = "Linked"
+            good++
+        } else if (failing > 0) {
+            verdict = "Not passed"
+            notPassed++
+        } else {
+            verdict = "Verified"
+            good++
+        }
+
+        prefix = csv(MODULES[m]) "," csv(identifier(o)) "," csv(body) ","
+        if (links == 0) {
+            out << prefix csv(verdict) ",,,\n"
+        } else {
+            writing = true
+            eachLink(o)
+        }
+    }
+}
+
+close out
+
+print "Requirements: " requirements "\n"
+if (STATUS_ATTRIBUTE == "") {
+    print "Linked: " good "\n"
+} else {
+    print "Verified: " good "\n"
+    print "Not passed: " notPassed "\n"
+}
+print "No link: " unlinked "\n"
+if (unopened > 0) print "INCOMPLETE: some linked modules could not be opened; see the warnings above\n"
+print "Report written to " OUTPUT_FILE "\n"

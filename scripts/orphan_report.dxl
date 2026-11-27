@@ -1,0 +1,113 @@
+// Orphan report: requirements missing a parent, a child, or a test.
+// Writes a CSV file. Reads only; changes nothing.
+
+pragma runLim, 0
+
+// ==== settings: change these ================================================
+// Run the lowest level separately: it has no children, so every row says "child".
+string MODULES[] = {"/Greenhouse Demo/System Requirements"}
+string OUTPUT_FILE = "orphan_report.csv"      // give a full path inside DOORS
+string PARENT_LINKS = "/Greenhouse Demo/satisfies"   // links child -> parent; "" skips these checks
+string TEST_LINKS = "/Greenhouse Demo/verifies"      // links test -> requirement; "" skips this check
+// ============================================================================
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+int unopened = 0
+
+// DOORS only sees an incoming link once the module that holds it is open.
+void openSources(Object o, string linkModule) {
+    ModName_ other
+    for other in o<-linkModule do {
+        if (null read(fullName(other), false)) {
+            print "WARNING: cannot open " fullName(other) "\n"
+            unopened++
+        }
+    }
+}
+
+bool hasParent(Object o) {
+    Link l
+    for l in o->PARENT_LINKS do {
+        ModName_ holder = target(l)
+        if (null read(fullName(holder), false)) {
+            print "WARNING: cannot open " fullName(holder) "\n"
+            unopened++
+            continue
+        }
+        Object far = target(l)
+        if (null far) continue
+        if (!isDeleted(far)) return true
+    }
+    return false
+}
+
+bool hasIncoming(Object o, string linkModule) {
+    openSources(o, linkModule)
+    Link l
+    for l in o<-linkModule do {
+        Object far = source(l)
+        if (null far) continue
+        if (!isDeleted(far)) return true
+    }
+    return false
+}
+
+Stream out = write OUTPUT_FILE
+out << "Module,Requirement,Requirement Text,Missing\n"
+
+int checked = 0, reported = 0
+int m
+for (m = 0; m < sizeof(MODULES); m++) {
+    Module reqs = read(MODULES[m], false)
+    if (null reqs) {
+        print "cannot open " MODULES[m] "\n"
+        halt
+    }
+    Object o
+    for o in entire(reqs) do {
+        if (isDeleted o) continue
+        if (table(o) || row(o) || cell(o)) continue
+        string body = o."Object Text"
+        if (body == "") continue                       // headings are not requirements
+        checked++
+
+        string missing = ""
+        if (PARENT_LINKS != "") {
+            if (!hasParent(o)) missing = "parent"
+            if (!hasIncoming(o, PARENT_LINKS)) {
+                if (missing != "") missing = missing " "
+                missing = missing "child"
+            }
+        }
+        if (TEST_LINKS != "") {
+            if (!hasIncoming(o, TEST_LINKS)) {
+                if (missing != "") missing = missing " "
+                missing = missing "test"
+            }
+        }
+        if (missing != "") {
+            reported++
+            out << csv(MODULES[m]) "," csv(identifier(o)) "," csv(body) "," csv(missing) "\n"
+        }
+    }
+}
+
+close out
+print "Requirements checked: " checked "\n"
+print "With something missing: " reported "\n"
+if (unopened > 0) print "INCOMPLETE: some linked modules could not be opened; see the warnings above\n"
+print "Report written to " OUTPUT_FILE "\n"

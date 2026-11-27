@@ -1,0 +1,194 @@
+// Traceability report with a dialog box: pick the requirement modules, press
+// "Write report", get a CSV file and a summary in the box. Reads only; changes
+// nothing.
+//
+// For each requirement (an object with Object Text) one row is written per
+// linked item, or one "No link" row.
+
+pragma runLim, 0    // large modules would otherwise hit DOORS's time limit
+
+// ==== settings: change these ================================================
+string FOLDER_PATH = "/Greenhouse Demo"        // the modules offered
+string DEFAULT_LINK_MODULE = "/Greenhouse Demo/verifies"   // "*" for every link module
+string DEFAULT_FILE = "dialog_trace.csv"       // give a full path inside DOORS
+const int MAX_MODULES = 200
+// ============================================================================
+
+string paths[MAX_MODULES]
+string names[MAX_MODULES]
+int moduleCount = 0
+
+Folder here = folder(FOLDER_PATH)
+if (null here) {
+    ack "No folder " FOLDER_PATH ": change FOLDER_PATH in the settings."
+    halt
+}
+Item entry
+for entry in here do {
+    if (type(entry) != "Formal") continue
+    if (isDeleted entry) continue
+    if (moduleCount >= MAX_MODULES) break
+    paths[moduleCount] = fullName(entry)
+    names[moduleCount] = name(entry)
+    moduleCount++
+}
+
+string directions[] = {"Links coming in", "Links going out"}
+
+DB box = create("Traceability report", styleCentered)
+DBE modulePick = multiList(box, "Requirement modules:", 320, 6, names, moduleCount)
+DBE followWay = radioBox(box, "Follow:", directions, 0)
+DBE linkModule = field(box, "Link module:", DEFAULT_LINK_MODULE, 40)
+DBE onlyMissing = toggle(box, "Report only requirements with no link", false)
+DBE outputFile = field(box, "Output file:", DEFAULT_FILE, 40)
+DBE summary = listView(box, 0, 420, 5, names, 0)
+DBE statusLine = label(box, "Choose one or more modules, then press Write report.")
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+
+// DOORS only sees an incoming link once the module that holds it is open.
+void openSources(Object o, string through) {
+    ModName_ other
+    for other in o<-through do {
+        if (null read(fullName(other), false)) {
+            print "WARNING: cannot open " fullName(other) "\n"
+        }
+    }
+}
+
+// Writes one row for each linked item and returns how many there were.
+int writeLinks(Stream out, string prefix, Object o, bool incoming, string through, bool writeRows) {
+    int found = 0
+    Link l
+    if (incoming) {
+        openSources(o, through)
+        for l in o<-through do {
+            Object far = source(l)
+            if (null far) continue
+            if (isDeleted far) continue
+            found++
+            if (writeRows) out << prefix "Linked," csv(identifier(far)) "," csv(fullName(module(far))) "\n"
+        }
+    } else {
+        for l in o->through do {
+            string farPath = fullName(target(l))
+            Module m = read(farPath, false)
+            if (null m) {
+                print "WARNING: cannot open " farPath "\n"
+                continue
+            }
+            Object far = target(l)
+            if (null far) continue
+            if (isDeleted far) continue
+            found++
+            if (writeRows) out << prefix "Linked," csv(identifier(far)) "," csv(farPath) "\n"
+        }
+    }
+    return found
+}
+
+bool isRequirement(Object o) {
+    if (isDeleted o) return false
+    if (table(o) || row(o) || cell(o)) return false    // tables are not reported
+    string body = o."Object Text"
+    return body != ""
+}
+
+void writeReport(DB db) {
+    int pick
+    int chosen = 0
+    for pick in modulePick do chosen++
+    if (chosen == 0) {
+        ack(db, "Choose at least one requirement module.")
+        return
+    }
+    string through = get(linkModule)
+    string outPath = get(outputFile)
+    if (through == "" || outPath == "") {
+        ack(db, "Give a link module (or *) and an output file.")
+        return
+    }
+    int way = get(followWay)
+    bool incoming = (way == 0)
+    bool missingOnly = get(onlyMissing)
+
+    int total = 0
+    for pick in modulePick do {
+        Module m = read(paths[pick], false)
+        if (null m) continue
+        Object o
+        for o in entire(m) do total++
+    }
+    if (total == 0) total = 1
+
+    Stream out = write outPath
+    out << "Module,Requirement,Requirement Text,Verdict,Linked Item,Linked Module\n"
+    empty(summary)
+    progressStart(db, "Traceability report", "Reading modules", total)
+
+    int done = 0, shownRows = 0, allMissing = 0, allRequirements = 0
+    for pick in modulePick do {
+        Module reqs = read(paths[pick], false)
+        if (null reqs) {
+            print "WARNING: cannot open " paths[pick] "\n"
+            continue
+        }
+        progressMessage(names[pick])
+        int requirements = 0, missing = 0
+        Object o
+        for o in entire(reqs) do {
+            done++
+            if (done <= total) progressStep(done)
+            if (progressCancelled()) break
+            if (!isRequirement(o)) continue
+            requirements++
+            string prefix = csv(paths[pick]) "," csv(identifier(o)) "," csv(o."Object Text" "") ","
+            int links = writeLinks(out, prefix, o, incoming, through, !missingOnly)
+            if (links == 0) {
+                out << prefix "No link,,\n"
+                missing++
+            }
+        }
+        insert(summary, shownRows, names[pick])
+        set(summary, shownRows, 1, requirements "")
+        set(summary, shownRows, 2, missing "")
+        shownRows++
+        allRequirements += requirements
+        allMissing += missing
+    }
+    close out
+    progressStop()
+
+    string result = "Requirements: " allRequirements ", with no link: " allMissing ". Written to " outPath
+    set(statusLine, result)
+    print result "\n"
+}
+
+void selectAll(DBE pressed) {
+    int i
+    for (i = 0; i < noElems(modulePick); i++) set(modulePick, i, true)
+}
+
+button(box, "Select all modules", selectAll)
+apply(box, "Write report", writeReport)
+
+// List view columns can only be added once the box has been realized.
+realize box
+insertColumn(summary, 0, "Module", 220, iconNone)
+insertColumn(summary, 1, "Requirements", 90, iconNone)
+insertColumn(summary, 2, "No link", 70, iconNone)
+show box

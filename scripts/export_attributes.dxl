@@ -1,0 +1,59 @@
+// Export chosen attributes of a module to a CSV file. Changes nothing.
+
+pragma runLim, 0
+
+// ==== settings: change these ================================================
+string MODULE_PATH = "/Greenhouse Demo/System Requirements"
+string ATTRIBUTES[] = {"Object Heading", "Object Text", "Priority", "Verification Method"}
+string OUTPUT_FILE = "export_attributes.csv"   // give a full path inside DOORS
+// ============================================================================
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+Module chosen = read(MODULE_PATH, false)
+if (null chosen) {
+    print "cannot open " MODULE_PATH "\n"
+    halt
+}
+int i
+for (i = 0; i < sizeof(ATTRIBUTES); i++) {
+    AttrDef wanted = find(chosen, ATTRIBUTES[i])
+    if (null wanted) {
+        print "this module has no attribute " ATTRIBUTES[i] "\n"
+        halt
+    }
+}
+
+Stream out = write OUTPUT_FILE
+out << "ID,Level"
+for (i = 0; i < sizeof(ATTRIBUTES); i++) out << "," csv(ATTRIBUTES[i])
+out << "\n"
+
+int rows = 0
+Object o
+for o in entire(chosen) do {
+    if (isDeleted o) continue
+    out << csv(identifier(o)) "," level(o) ""
+    for (i = 0; i < sizeof(ATTRIBUTES); i++) {
+        string name = ATTRIBUTES[i]
+        out << "," csv(o.name "")
+    }
+    out << "\n"
+    rows++
+}
+
+close out
+print rows " objects written to " OUTPUT_FILE "\n"

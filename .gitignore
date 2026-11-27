@@ -1,0 +1,9 @@
+dist/
+src/web/generated/
+node_modules/
+*.odb
+*.tmp
+*.csv
+*.reqif
+*.reqifz
+.DS_Store

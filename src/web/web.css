@@ -1,0 +1,129 @@
+/* The notices of a database kept in the browser, and the layout for phones. */
+body { height: 100dvh; }
+#notice { padding: 2px 8px; background: #fff3bf; border-bottom: 1px solid var(--edge); font-size: 12px; }
+#storage-problem { padding: 4px 8px; background: #a40000; color: #fff; font-weight: 600; }
+#tree-toggle { display: none; }
+#stop { position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); bottom: 40px; padding: 8px 18px; border: 2px solid #a40000; font-weight: 700; white-space: nowrap; }
+
+/* Phones, and phones held sideways: bigger targets. */
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
+  body { font-size: 14px; }
+  button { min-height: 34px; min-width: 34px; }
+  input[type=text], input[type=search], select, textarea { font-size: 16px; min-height: 34px; }
+  input[type=checkbox] { width: 20px; height: 20px; vertical-align: middle; }
+  #notice { font-size: 11px; }
+  #menubar > button { padding: 1px 7px; min-height: 30px; }
+  #tree-toggle { display: inline-block; font-weight: 700; }
+  #toolbar { gap: 4px; padding: 4px; }
+  #toolbar .wide-only { display: none; }
+  #toolbar > button { padding: 2px 8px; }
+  #toolbar > button, #toolbar select, #toolbar input[type=search] { min-height: 32px; }
+  table.report { font-size: 12px; }
+  #toolbar select { max-width: 46vw; }
+  #toolbar input[type=search] { flex: 1 1 100px; min-width: 0; width: 100px; }
+  #body { position: relative; touch-action: manipulation; }
+
+  /* The tree is a drawer; properties and the DXL window take the screen. */
+  #explorer { display: none; position: absolute; top: 0; bottom: 0; left: 0; width: min(320px, 88vw); z-index: 15; resize: none; box-shadow: 4px 0 14px #0006; }
+  body.tree-open #explorer { display: block; }
+  .node { padding: 8px 2px; }
+  .twisty { width: 32px; font-size: 18px; }
+  #props { position: absolute; inset: 0; width: auto; z-index: 14; background: var(--face); }
+  #props .entry button { font-size: 13px; padding: 2px 8px; }
+
+  a.go { display: inline-block; padding: 3px 0; }
+
+  .menu { min-width: 240px; max-width: calc(100vw - 8px); max-height: 70dvh; }
+  .menu button { padding: 6px 12px; gap: 10px; }
+  .menu .label { white-space: normal; }
+  .menu .key { display: none; }
+
+  dialog { min-width: 0; width: calc(100vw - 12px); max-width: calc(100vw - 12px); max-height: 94dvh; }
+  dialog .content { max-height: 66dvh; }
+  dialog textarea, dialog textarea.layout { width: 100%; max-width: 100%; }
+  dialog select { max-width: 100%; }
+  dialog .buttons { flex-wrap: wrap; }
+  .form { grid-template-columns: minmax(0, 1fr); }
+  .checks label { display: block; padding: 6px 0; }
+
+  #dxl { inset: 0; width: auto; height: auto; min-width: 0; min-height: 0; resize: none; }
+  #dxl .tools { max-height: 34dvh; overflow: auto; gap: 4px 8px; padding: 4px; }
+  #dxl .tools select { max-width: 100%; }
+  #dxl .gutter, #dxl textarea { font-size: 16px; line-height: 20px; }
+  #dxl .gutter { min-width: 30px; }
+  #dxl.ran .source { flex: 2; }
+  #dxl.ran .result { flex: 3; }
+  #dxl .titlebar button { min-width: 44px; }
+  #status { flex-wrap: wrap; font-size: 12px; }
+}
+
+/* A narrow screen shows each object as a card instead of a row of columns. */
+@media (max-width: 700px) {
+  table.grid, .grid tbody, .grid tr, .grid td { display: block; width: auto; }
+  .grid thead { display: none; }
+  .grid tr { border-bottom: 2px solid var(--edge); padding: 4px 0; }
+  .grid tbody tr.picked { background: var(--pick); box-shadow: inset 4px 0 0 #316ac5; }
+  .grid td { border: 0; padding: 1px 10px; text-align: left !important; }
+  .grid td.id { font-size: 12px; font-weight: 700; }
+  .grid td.main, .grid td.attr, .grid td.trace { min-width: 0; width: auto; }
+  .grid td.main > div { padding-left: 0 !important; }
+  .grid td.attr, .grid td.trace { font-size: 13px; }
+  .grid td.attr::before, .grid td.trace::before { content: attr(data-label) ": "; font-weight: 700; color: #555; }
+  .grid td.blank { display: none; }
+  .grid td.trace a { display: inline-block; padding: 5px 6px 5px 0; min-width: 24px; }
+  .suspect { font-size: 12px; }
+
+  /* Tables in dialogs stack too, each value beside its heading. */
+  table.list:not(.report), .list:not(.report) tbody, .list:not(.report) tr, .list:not(.report) td { display: block; }
+  .list:not(.report) thead { display: none; }
+  .list:not(.report) tr { border: 1px solid var(--edge); margin-bottom: 6px; }
+  .list:not(.report) td { border: 0; max-width: none; }
+  .list:not(.report) td:empty { display: none; }
+  .list:not(.report) td[data-label]::before { content: attr(data-label) ": "; font-weight: 700; color: #555; }
+}
+
+/* A script's dialog boxes (dialogs.ts): they float, and leave the page usable. */
+.dxlbox { position: fixed; z-index: 40; display: flex; flex-direction: column; min-width: 280px; max-width: min(960px, calc(100vw - 8px)); max-height: calc(100dvh - 90px); background: var(--face); border: 2px solid var(--title); box-shadow: 4px 6px 20px #0006; }
+.dxlbox .titlebar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 3px 4px 3px 8px; background: var(--title); color: #fff; font-weight: 600; cursor: move; }
+.dxlbox .titlebar button { color: #000; padding: 0 8px; }
+.dxlbox .content { padding: 8px 10px; overflow: auto; }
+.dxlbox.busy .titlebar { cursor: progress; opacity: .75; }
+.dxlbox .row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 12px; margin-bottom: 6px; }
+.dxlbox .row.end { justify-content: flex-end; }
+.dxlbox .element { margin: 0; max-width: 100%; }
+.dxlbox .element.full { flex: 1 1 100%; }
+.dxlbox .element.opposite { margin-left: auto; }
+.dxlbox label.element { display: flex; align-items: baseline; gap: 6px; }
+.dxlbox label.element.full > span:last-child, .dxlbox label.element.full > input, .dxlbox label.element.full > textarea { flex: 1; min-width: 0; }
+.dxlbox label.element.full > span:last-child { display: flex; gap: 6px; align-items: baseline; }
+.dxlbox label.element.full > span:last-child > input[type=text] { flex: 1; min-width: 0; }
+.dxlbox label.element > input[type=text], .dxlbox label.element > span, .dxlbox label.element span > input { min-width: 0; max-width: 100%; }
+.dxlbox label.element > .name { flex: 0 0 auto; max-width: 45%; }
+.dxlbox .element.stacked { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.dxlbox .element.label { white-space: pre-wrap; }
+.dxlbox textarea { min-width: 240px; max-width: 100%; min-height: 3em; }
+.dxlbox .hint { color: #555; font-size: 11px; }
+.dxlbox fieldset { border: 1px solid var(--edge); padding: 2px 8px 4px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.dxlbox fieldset.vertical { flex-direction: column; }
+.dxlbox .dxllist { background: #fff; border: 1px solid #7f9db9; overflow: auto; max-width: 100%; min-width: 180px; resize: vertical; }
+.dxlbox .dxllist.off { color: #999; background: var(--face); }
+.dxlbox .dxllist table { border-collapse: collapse; width: 100%; }
+.dxlbox .dxllist th { position: sticky; top: 0; background: var(--face); text-align: left; font-weight: 600; padding: 2px 6px; border: 1px solid var(--edge); }
+.dxlbox .dxllist td { padding: 2px 6px; white-space: nowrap; cursor: default; user-select: none; }
+.dxlbox .dxllist tr.picked td { background: #316ac5; color: #fff; }
+.dxlbox .buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--edge); }
+.dxlbox .buttons button { min-width: 72px; }
+.dxlbox .problem { color: #a40000; font-weight: 600; padding: 0 10px; white-space: pre-wrap; }
+.dxlbox .problem:empty { display: none; }
+.dxlbox .problem .note { color: #333; font-weight: 400; }
+.dxlmessage { z-index: 45; left: 50%; top: 18%; transform: translateX(-50%); }
+.dxlmessage .message { margin-bottom: 8px; }
+.dxlmessage .message .heading { font-weight: 700; }
+.dxlmessage .message .text { white-space: pre-wrap; }
+.dxlprogress { position: fixed; z-index: 55; left: 50%; top: 12%; transform: translateX(-50%); width: min(420px, calc(100vw - 16px)); padding: 8px 12px; background: var(--face); border: 2px solid var(--title); box-shadow: 4px 6px 20px #0006; }
+.dxlprogress .heading { font-weight: 700; }
+.dxlprogress progress { width: 100%; }
+@media (max-width: 700px) {
+  .dxlbox:not(.dxlmessage) { left: 4px !important; right: 4px; top: 48px !important; min-width: 0; }
+  .dxlmessage { width: calc(100vw - 12px); min-width: 0; }
+}

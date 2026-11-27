@@ -1,0 +1,228 @@
+{
+  "format": "opendoor-project",
+  "version": 1,
+  "created_on": "2026-01-12 09:00:00",
+  "folders": [
+    {"path": "/Greenhouse Demo", "project": true, "description": "Invented example: an automated hobby greenhouse. For learning and for trying scripts."}
+  ],
+  "link_modules": [
+    {"path": "/Greenhouse Demo/satisfies", "description": "Lower-level requirement (source) satisfies a higher-level one (target)"},
+    {"path": "/Greenhouse Demo/verifies", "description": "Test case (source) verifies a requirement (target)"}
+  ],
+  "modules": [
+    {
+      "path": "/Greenhouse Demo/Stakeholder Needs",
+      "prefix": "STK-",
+      "description": "What the greenhouse owner needs, in the owner's words",
+      "types": [
+        {"name": "Priority", "base": "Enumeration", "values": ["High", "Medium", "Low"]}
+      ],
+      "attributes": [
+        {"name": "Priority", "type": "Priority", "default": "Medium"},
+        {"name": "Source", "type": "String"},
+        {"name": "Document Owner", "type": "String", "scope": "module"}
+      ],
+      "module_values": {"Document Owner": "Product lead"},
+      "objects": [
+        {"number": 1, "heading": "Growing conditions", "children": [
+          {"number": 2, "text": "I want my plants kept at a comfortable temperature without having to watch them.", "values": {"Priority": "High", "Source": "Owner interview"}},
+          {"number": 3, "text": "I want the soil watered when it is dry, and not drowned.", "values": {"Priority": "High", "Source": "Owner interview"}},
+          {"number": 4, "text": "I want the plants to get enough light in winter.", "values": {"Priority": "Medium", "Source": "Owner survey"}}
+        ]},
+        {"number": 5, "heading": "Living with it", "children": [
+          {"number": 6, "text": "I want to see what the greenhouse is doing from inside the house.", "values": {"Priority": "Medium", "Source": "Owner interview"}},
+          {"number": 7, "text": "I want to be warned when something is wrong.", "values": {"Priority": "High", "Source": "Owner interview"}},
+          {"number": 8, "text": "I want it to keep my plants safe during a power cut.", "values": {"Priority": "Medium", "Source": "Owner survey"}},
+          {"number": 9, "text": "I want to set it up in an afternoon without an electrician.", "values": {"Priority": "Low", "Source": "Owner survey"}},
+          {"number": 10, "text": "Nobody should be able to get hurt by it, including curious children.", "values": {"Priority": "High", "Source": "Safety review"}}
+        ]}
+      ],
+      "views": {
+        "Priorities": {"columns": ["ID", "Object Heading", "Object Text", "Priority", "Source"], "filter": null, "sort": null}
+      }
+    },
+    {
+      "path": "/Greenhouse Demo/System Requirements",
+      "prefix": "SRS-",
+      "description": "What the greenhouse system shall do",
+      "types": [
+        {"name": "Priority", "base": "Enumeration", "values": ["High", "Medium", "Low"]},
+        {"name": "Verification Method", "base": "Enumeration", "values": ["Test", "Analysis", "Inspection", "Demonstration"]},
+        {"name": "Document Status", "base": "Enumeration", "values": ["Draft", "In Review", "Released"]}
+      ],
+      "attributes": [
+        {"name": "Priority", "type": "Priority", "default": "Medium"},
+        {"name": "Verification Method", "type": "Verification Method"},
+        {"name": "Rationale", "type": "Text"},
+        {"name": "Document Status", "type": "Document Status", "scope": "module", "default": "Draft"}
+      ],
+      "module_values": {"Document Status": "In Review"},
+      "objects": [
+        {"number": 1, "heading": "Climate control", "children": [
+          {"number": 2, "text": "The system shall hold the air temperature within 2 °C of the set point while the outside temperature is between -10 °C and 35 °C.", "values": {"Priority": "High", "Verification Method": "Test", "Rationale": "Most seedlings tolerate this band."}},
+          {"number": 3, "text": "The system shall let the user choose a temperature set point from 10 °C to 30 °C in steps of 0.5 °C.", "values": {"Priority": "Medium", "Verification Method": "Demonstration"}},
+          {"number": 4, "text": "The system shall keep relative humidity at an appropriate level and should avoid condensation where possible.", "values": {"Priority": "Low", "Verification Method": "Analysis"}}
+        ]},
+        {"number": 5, "heading": "Irrigation and light", "children": [
+          {"number": 6, "text": "The system shall start watering a bed when its soil moisture falls below the threshold chosen for that bed.", "values": {"Priority": "High", "Verification Method": "Test"}},
+          {"number": 7, "text": "The system shall stop watering a bed after at most TBD minutes, whatever the moisture sensor reports.", "values": {"Priority": "High", "Verification Method": "Test", "Rationale": "A failed sensor must not flood the bed."}},
+          {"number": 8, "text": "The system shall provide supplementary light until each day has had at least 12 hours of light.", "values": {"Priority": "Medium", "Verification Method": "Test"}}
+        ]},
+        {"number": 9, "heading": "Monitoring and alerts", "children": [
+          {"number": 10, "text": "The system shall show temperature, humidity, and soil moisture on a home display, no more than 60 seconds old.", "values": {"Priority": "Medium", "Verification Method": "Demonstration"}},
+          {"number": 11, "text": "The system shall alert the user within 5 minutes when the air temperature leaves the range 5 °C to 40 °C.", "values": {"Priority": "High", "Verification Method": "Test"}},
+          {"number": 12, "text": "The system shall alert the user when a sensor stops reporting for more than 10 minutes.", "values": {"Priority": "High", "Verification Method": "Test"}},
+          {"number": 18, "text": "The system shall show a colour-changing light on the roof ridge.", "values": {"Priority": "Low", "Verification Method": "Inspection"}}
+        ]},
+        {"number": 13, "heading": "Power and safety", "children": [
+          {"number": 14, "text": "The system shall keep monitoring and alerting for at least 4 hours after mains power is lost.", "values": {"Priority": "High", "Verification Method": "Test"}},
+          {"number": 15, "text": "The system shall close the roof vent when mains power is lost.", "values": {"Priority": "Medium", "Verification Method": "Demonstration"}},
+          {"number": 16, "text": "No user-accessible part of the system shall carry more than 24 V.", "values": {"Priority": "High", "Verification Method": "Inspection"}},
+          {"number": 17, "text": "The roof vent shall stop closing when it meets a resistance greater than 20 N.", "values": {"Priority": "High", "Verification Method": "Test"}},
+          {"number": 19, "text": "The system shall play a tune when watering starts.", "values": {"Priority": "Low", "Verification Method": "Demonstration"}}
+        ]}
+      ],
+      "views": {
+        "Review": {"columns": ["ID", "Object Heading", "Object Text", "Priority", "Verification Method", "Rationale"], "filter": null, "sort": null}
+      }
+    },
+    {
+      "path": "/Greenhouse Demo/Subsystem Requirements",
+      "prefix": "SUB-",
+      "description": "Requirements allocated to the climate, irrigation, control, and power subsystems",
+      "types": [
+        {"name": "Subsystem", "base": "Enumeration", "values": ["Climate", "Irrigation", "Control", "Power"]},
+        {"name": "Verification Method", "base": "Enumeration", "values": ["Test", "Analysis", "Inspection", "Demonstration"]}
+      ],
+      "attributes": [
+        {"name": "Subsystem", "type": "Subsystem"},
+        {"name": "Verification Method", "type": "Verification Method"}
+      ],
+      "objects": [
+        {"number": 1, "heading": "Climate", "children": [
+          {"number": 2, "text": "The heater shall deliver at least 600 W of heat.", "values": {"Subsystem": "Climate", "Verification Method": "Analysis"}},
+          {"number": 3, "text": "The roof vent actuator shall move from closed to fully open in no more than 30 seconds.", "values": {"Subsystem": "Climate", "Verification Method": "Test"}},
+          {"number": 4, "text": "The air temperature sensor shall be accurate to 0.5 °C from -10 °C to 50 °C.", "values": {"Subsystem": "Climate", "Verification Method": "Test"}},
+          {"number": 5, "text": "The vent actuator shall reverse when its motor current shows a force above 20 N.", "values": {"Subsystem": "Climate", "Verification Method": "Test"}}
+        ]},
+        {"number": 6, "heading": "Irrigation", "children": [
+          {"number": 7, "text": "Each bed shall have its own soil moisture sensor and valve.", "values": {"Subsystem": "Irrigation", "Verification Method": "Inspection"}},
+          {"number": 8, "text": "Each valve shall close when it is not powered.", "values": {"Subsystem": "Irrigation", "Verification Method": "Demonstration"}}
+        ]},
+        {"number": 9, "heading": "Control", "children": [
+          {"number": 10, "text": "The controller shall read every sensor at least once every 30 seconds.", "values": {"Subsystem": "Control", "Verification Method": "Test"}},
+          {"number": 11, "text": "The controller shall close a valve when its watering time limit expires.", "values": {"Subsystem": "Control", "Verification Method": "Test"}},
+          {"number": 12, "text": "The controller shall send each alert to the home display and to the user's phone.", "values": {"Subsystem": "Control", "Verification Method": "Demonstration"}},
+          {"number": 13, "text": "The controller shall keep its settings through a loss of power.", "values": {"Subsystem": "Control", "Verification Method": "Test"}}
+        ]},
+        {"number": 14, "heading": "Power", "children": [
+          {"number": 15, "text": "The backup battery shall supply the controller, sensors, and radio for at least 4 hours.", "values": {"Subsystem": "Power", "Verification Method": "Test"}},
+          {"number": 16, "text": "The power supply shall convert mains power to 24 V in a sealed, certified enclosure.", "values": {"Subsystem": "Power", "Verification Method": "Inspection"}}
+        ]}
+      ]
+    },
+    {
+      "path": "/Greenhouse Demo/Verification",
+      "prefix": "TC-",
+      "description": "Test cases and their latest results",
+      "types": [
+        {"name": "Verification Method", "base": "Enumeration", "values": ["Test", "Analysis", "Inspection", "Demonstration"]},
+        {"name": "Verification Status", "base": "Enumeration", "values": ["Passed", "Failed", "Not Run"]}
+      ],
+      "attributes": [
+        {"name": "Verification Method", "type": "Verification Method", "default": "Test"},
+        {"name": "Verification Status", "type": "Verification Status", "default": "Not Run"}
+      ],
+      "objects": [
+        {"number": 1, "heading": "System tests", "children": [
+          {"number": 2, "short_text": "Temperature hold", "text": "Run a 24 hour cycle in a climate chamber from -10 °C to 35 °C and log the air temperature.", "values": {"Verification Status": "Passed"}},
+          {"number": 3, "short_text": "Set point", "text": "Select the lowest, highest, and a half-degree set point from the home display.", "values": {"Verification Method": "Demonstration", "Verification Status": "Passed"}},
+          {"number": 4, "short_text": "Dry bed", "text": "Dry a bed below its threshold and confirm that only its valve opens.", "values": {"Verification Status": "Passed"}},
+          {"number": 5, "short_text": "Light hours", "text": "Simulate an 8 hour day and measure how long the lamps stay on.", "values": {"Verification Status": "Not Run"}},
+          {"number": 6, "short_text": "Display age", "text": "Change each reading and time the update on the home display.", "values": {"Verification Method": "Demonstration", "Verification Status": "Passed"}},
+          {"number": 7, "short_text": "Temperature alert", "text": "Heat the air sensor above 40 °C and time the alert.", "values": {"Verification Status": "Passed"}},
+          {"number": 8, "short_text": "Silent sensor", "text": "Unplug each sensor in turn and time the alert.", "values": {"Verification Status": "Failed"}},
+          {"number": 9, "short_text": "Power cut", "text": "Remove mains power and record how long alerts keep arriving.", "values": {"Verification Status": "Not Run"}},
+          {"number": 10, "short_text": "Low voltage", "text": "Inspect every accessible conductor and measure its voltage.", "values": {"Verification Method": "Inspection", "Verification Status": "Passed"}},
+          {"number": 11, "short_text": "Vent pinch", "text": "Obstruct the closing vent with a force gauge.", "values": {"Verification Status": "Passed"}}
+        ]},
+        {"number": 12, "heading": "Subsystem tests", "children": [
+          {"number": 13, "short_text": "Vent speed", "text": "Time ten full openings of the roof vent.", "values": {"Verification Status": "Passed"}},
+          {"number": 14, "short_text": "Sensor accuracy", "text": "Compare the air sensor with a reference thermometer at five temperatures.", "values": {"Verification Status": "Passed"}},
+          {"number": 15, "short_text": "Valve fail-safe", "text": "Remove power from an open valve and check for flow.", "values": {"Verification Method": "Demonstration", "Verification Status": "Passed"}},
+          {"number": 16, "short_text": "Scan period", "text": "Log sensor reads for one hour and find the longest gap.", "values": {"Verification Status": "Passed"}},
+          {"number": 17, "short_text": "Battery life", "text": "Discharge the battery under full monitoring load.", "values": {"Verification Status": "Not Run"}},
+          {"number": 18, "short_text": "Heater output", "text": "Calculate heat output from measured supply current.", "values": {"Verification Method": "Analysis", "Verification Status": "Passed"}}
+        ]}
+      ],
+      "views": {
+        "Status": {"columns": ["ID", "Object Short Text", "Object Text", "Verification Method", "Verification Status"], "filter": null, "sort": null},
+        "Failed tests": {"columns": ["ID", "Object Short Text", "Object Text", "Verification Status"], "filter": {"attribute": "Verification Status", "op": "==", "value": "Failed"}, "sort": null}
+      }
+    }
+  ],
+  "links": [
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-2", "to": "STK-2"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-3", "to": "STK-2"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-4", "to": "STK-2"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-6", "to": "STK-3"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-7", "to": "STK-3"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-8", "to": "STK-4"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-10", "to": "STK-6"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-11", "to": "STK-7"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-12", "to": "STK-7"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-14", "to": "STK-8"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-15", "to": "STK-8"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-16", "to": "STK-10"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SRS-17", "to": "STK-10"},
+
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-2", "to": "SRS-2"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-3", "to": "SRS-2"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-4", "to": "SRS-2"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-5", "to": "SRS-17"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-7", "to": "SRS-6"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-8", "to": "SRS-7"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-10", "to": "SRS-10"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-11", "to": "SRS-7"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-12", "to": "SRS-11"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-12", "to": "SRS-12"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-13", "to": "SRS-3"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-15", "to": "SRS-14"},
+    {"module": "/Greenhouse Demo/satisfies", "from": "SUB-16", "to": "SRS-16"},
+
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-2", "to": "SRS-2"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-3", "to": "SRS-3"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-4", "to": "SRS-6"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-4", "to": "SUB-7"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-5", "to": "SRS-8"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-6", "to": "SRS-10"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-7", "to": "SRS-11"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-7", "to": "SUB-12"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-8", "to": "SRS-12"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-9", "to": "SRS-14"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-9", "to": "SRS-15"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-10", "to": "SRS-16"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-10", "to": "SUB-16"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-11", "to": "SRS-17"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-11", "to": "SUB-5"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-13", "to": "SUB-3"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-14", "to": "SUB-4"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-15", "to": "SUB-8"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-16", "to": "SUB-10"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-17", "to": "SUB-15"},
+    {"module": "/Greenhouse Demo/verifies", "from": "TC-18", "to": "SUB-2"}
+  ],
+  "steps": [
+    {"op": "baseline", "module": "/Greenhouse Demo/Stakeholder Needs", "annotation": "Preliminary design review"},
+    {"op": "baseline", "module": "/Greenhouse Demo/System Requirements", "annotation": "Preliminary design review"},
+    {"op": "baseline", "module": "/Greenhouse Demo/Subsystem Requirements", "annotation": "Preliminary design review"},
+    {"op": "baseline", "module": "/Greenhouse Demo/Verification", "annotation": "Preliminary design review"},
+
+    {"op": "set", "object": "SRS-2", "text": "The system shall hold the air temperature within 1.5 °C of the set point while the outside temperature is between -10 °C and 35 °C."},
+    {"op": "set", "object": "SRS-14", "text": "The system shall keep monitoring and alerting for at least 8 hours after mains power is lost.", "values": {"Rationale": "Owners reported overnight power cuts."}},
+    {"op": "add", "module": "/Greenhouse Demo/System Requirements", "after": "SRS-12", "text": "The system shall alert the user when the backup battery is below 20 % charge.", "values": {"Priority": "Medium", "Verification Method": "Test"}},
+    {"op": "link", "module": "/Greenhouse Demo/satisfies", "from": "SRS-20", "to": "STK-7"},
+    {"op": "delete", "object": "SRS-19"},
+    {"op": "set", "object": "TC-5", "values": {"Verification Status": "Failed"}}
+  ]
+}

@@ -1,0 +1,82 @@
+// What changed since the most recent baseline: added, deleted, and edited
+// objects, attribute by attribute. Writes a CSV file. Changes nothing.
+
+pragma runLim, 0
+
+// ==== settings: change these ================================================
+string MODULE_PATH = "/Greenhouse Demo/System Requirements"
+string OUTPUT_FILE = "baseline_changes.csv"   // give a full path inside DOORS
+// ============================================================================
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+Module latest = read(MODULE_PATH, false)
+if (null latest) {
+    print "cannot open " MODULE_PATH "\n"
+    halt
+}
+Baseline last = getMostRecentBaseline(latest)
+if (null last) {
+    print "this module has no baseline\n"
+    halt
+}
+Module frozen = load(latest, last, false)
+
+Stream out = write OUTPUT_FILE
+out << "Object,Change,Attribute,Was,Is\n"
+
+int added = 0, deleted = 0, edited = 0
+Object o
+for o in entire(latest) do {
+    int n = o."Absolute Number"
+    Object old = object(n, frozen)
+    bool inOld = false
+    if (!null old) inOld = !isDeleted(old)
+    bool inNew = !isDeleted(o)
+    if (inNew && !inOld) {
+        added++
+        out << csv(identifier(o)) ",added,,," csv(o."Object Heading" "" o."Object Text" "") "\n"
+    } else if (inOld && !inNew) {
+        deleted++
+        out << csv(identifier(o)) ",deleted,," csv(old."Object Heading" "" old."Object Text" "") ",\n"
+    } else if (inOld && inNew) {
+        bool changed = false
+        AttrDef definition
+        for definition in latest do {
+            if (!definition.object) continue
+            string name = definition.name
+            // DOORS counts the three text attributes as system ones too; keep
+            // those, and skip the other system attributes (dates, users, ...).
+            if (definition.system && name != "Object Heading" && name != "Object Text" && name != "Object Short Text") continue
+            AttrDef earlier = find(frozen, name)
+            if (null earlier) continue
+            string a = old.name ""
+            string b = o.name ""
+            if (a != b) {
+                changed = true
+                out << csv(identifier(o)) ",changed," csv(name) "," csv(a) "," csv(b) "\n"
+            }
+        }
+        if (changed) edited++
+    }
+}
+
+close out
+print "Compared with baseline " major(last) "." minor(last) " " suffix(last) "\n"
+print "Added: " added "\n"
+print "Deleted: " deleted "\n"
+print "Edited: " edited "\n"
+print "Report written to " OUTPUT_FILE "\n"

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenDoor</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="web.css">
+<link rel="stylesheet" href="trace.css">
+</head>
+<body>
+<div id="notice">A practice tool, not DOORS, not affiliated with IBM. Made-up data only. Everything stays in this browser.</div>
+<div id="storage-problem" role="alert" hidden></div>
+<div id="menubar" role="menubar"></div>
+<div id="toolbar"></div>
+<div id="body">
+  <nav id="explorer" aria-label="Database explorer"></nav>
+  <main id="main"></main>
+  <aside id="props" hidden aria-label="Object properties"></aside>
+</div>
+<section id="dxl" hidden aria-label="DXL interaction"></section>
+<div id="status"><span id="message" role="status"></span><span id="counts"></span></div>
+<button id="stop" type="button" hidden>Stop script</button>
+<noscript>OpenDoor needs JavaScript.</noscript>
+<script src="transport.js"></script>
+<script src="app.js"></script>
+<script src="trace.js"></script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+:root { --face: #ece9d8; --edge: #aca899; --title: #0a246a; --pick: #fff3bf; --link-out: #c0392b; --link-in: #d35400; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; font: 13px "Segoe UI", Tahoma, Arial, sans-serif; color: #000; background: var(--face); }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: linear-gradient(#fff, #e3e0d0); border: 1px solid #7a776a; border-radius: 3px; padding: 2px 10px; cursor: pointer; }
+button:disabled { color: #999; cursor: default; }
+button.primary { border-color: var(--title); font-weight: 600; }
+input[type=text], input[type=search], select, textarea { background: #fff; border: 1px solid #7f9db9; padding: 2px 4px; }
+
+#menubar { display: flex; flex-wrap: wrap; padding: 1px 4px; border-bottom: 1px solid var(--edge); }
+#menubar > button { background: none; border: 1px solid transparent; }
+#menubar > button:hover, #menubar > button.open { background: #c1d2ee; border-color: #316ac5; }
+.menu { position: fixed; z-index: 50; min-width: 220px; max-height: 80vh; overflow: auto; background: #fff; border: 1px solid #716f64; box-shadow: 2px 3px 8px #0005; padding: 2px; }
+.menu button { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; width: 100%; text-align: left; background: none; border: 0; padding: 4px 18px; }
+.menu .label { white-space: nowrap; }
+.menu .why { font-size: 11px; font-style: italic; text-align: right; }
+.menu button:hover:enabled { background: #316ac5; color: #fff; }
+.menu hr { border: 0; border-top: 1px solid var(--edge); margin: 3px 4px; }
+.menu .key { opacity: .6; }
+
+#toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--edge); }
+#toolbar > button { padding: 2px 8px; }
+#toolbar input[type=search] { width: 150px; }
+#toolbar .gap { width: 4px; }
+#toolbar select { max-width: 160px; }
+#toolbar .hint { color: #555; }
+
+#body { flex: 1; display: flex; min-height: 0; }
+#explorer { width: 220px; flex: none; resize: horizontal; overflow: auto; background: #fff; border-right: 1px solid var(--edge); padding: 4px; }
+#main { flex: 1; min-width: 0; overflow: auto; background: #fff; outline: none; }
+#props { width: 300px; flex: none; overflow: auto; border-left: 1px solid var(--edge); padding: 8px; }
+#status { display: flex; justify-content: space-between; gap: 16px; padding: 2px 8px; border-top: 1px solid var(--edge); min-height: 22px; }
+#message.error { color: #a40000; font-weight: 600; }
+
+.node { display: flex; align-items: center; gap: 4px; padding: 1px 2px; white-space: nowrap; cursor: default; }
+.node.picked { background: #316ac5; color: #fff; }
+.node.deleted .name { text-decoration: line-through; opacity: .6; }
+.twisty { width: 14px; text-align: center; cursor: pointer; color: #555; flex: none; }
+.node.picked .twisty { color: #fff; }
+.icon { display: inline-block; width: 15px; height: 14px; flex: none; border: 1px solid #555; border-radius: 2px; font: 700 9px/12px Arial, sans-serif; text-align: center; color: #000; }
+.icon.folder { background: #ffe58a; }
+.icon.project { background: #b5e3a1; }
+.icon.formal { background: #bcd6ff; }
+.icon.link { background: #f4c2c2; }
+.branch { margin-left: 14px; }
+
+.banner { padding: 4px 10px; background: #ffe9a8; border-bottom: 1px solid #c9a227; font-weight: 600; position: sticky; left: 0; }
+.empty { padding: 20px; color: #555; }
+table.grid { border-collapse: separate; border-spacing: 0; width: 100%; }
+.grid th, .grid td { border-right: 1px solid #c8c8c8; border-bottom: 1px solid #c8c8c8; padding: 3px 6px; vertical-align: top; text-align: left; }
+.grid th { background: var(--face); font-weight: 600; position: sticky; top: 0; z-index: 2; border-bottom-color: var(--edge); white-space: nowrap; }
+.grid td { overflow-wrap: anywhere; }
+.grid tbody tr.picked td { background: var(--pick); }
+.grid td.id { overflow-wrap: normal; white-space: nowrap; color: #333; width: 1%; }
+.grid td.main { min-width: 240px; width: 50%; }
+.grid td.attr { min-width: 90px; white-space: pre-wrap; }
+.grid td.trace { min-width: 135px; width: 20%; font-size: 12px; }
+.grid td.computed { white-space: pre-wrap; }
+dialog textarea.layout { width: 620px; max-width: 80vw; height: 300px; font: 12px/17px Consolas, Menlo, "Courier New", monospace; white-space: pre; tab-size: 4; }
+.grid tr.deleted td { color: #999; text-decoration: line-through; }
+.number { display: inline-block; margin-right: 10px; color: #333; }
+.heading { font-weight: 700; white-space: pre-wrap; }
+.level1 .heading { font-size: 17px; }
+.level2 .heading { font-size: 15px; }
+.short { font-style: italic; white-space: pre-wrap; }
+.text { white-space: pre-wrap; margin-top: 2px; min-height: 1em; }
+.mark { float: right; margin-left: 4px; font-size: 11px; }
+.mark.out, .arrow.out { color: var(--link-out); }
+.mark.in, .arrow.in { color: var(--link-in); }
+.trace .entry { margin-bottom: 4px; }
+a.go { color: #00419c; cursor: pointer; text-decoration: underline; font-weight: 600; }
+.suspect { display: inline-block; margin-left: 4px; padding: 0 4px; background: #c00; color: #fff; border-radius: 2px; font-size: 10px; font-weight: 700; }
+.editor { width: 100%; min-width: 120px; }
+textarea.editor { min-height: 60px; resize: vertical; }
+
+#props h3 { margin: -8px -8px 6px; padding: 8px 8px 4px; font-size: 14px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: -8px; background: var(--face); z-index: 1; }
+#props h4 { margin: 12px 0 4px; border-bottom: 1px solid var(--edge); }
+#props label { display: block; margin-top: 6px; font-weight: 600; }
+#props input[type=text], #props select, #props textarea { width: 100%; font-weight: normal; }
+#props textarea { min-height: 70px; resize: vertical; }
+#props .meta { color: #555; font-size: 12px; }
+#props .entry { margin-bottom: 6px; }
+#props .entry button { font-size: 11px; padding: 0 6px; margin-right: 4px; }
+
+/* Attribute DXL: calculated values are read only; a failed one shows its error. */
+#props textarea.calculated { background: #f1f1f4; }
+.grid td.dxl-failed, #props textarea.dxl-failed { color: #a40000; font-style: italic; background: #fbe0e0; }
+textarea.code { width: 100%; font: 12px/17px Consolas, Menlo, "Courier New", monospace; white-space: pre; tab-size: 4; }
+.form .meta { color: #555; font-size: 12px; }
+.list td.code { font: 12px/17px Consolas, Menlo, "Courier New", monospace; }
+
+dialog { border: 2px solid var(--title); padding: 0; background: var(--face); min-width: 380px; max-width: 92vw; max-height: 90vh; box-shadow: 4px 6px 20px #0006; }
+dialog::backdrop { background: #0003; }
+.titlebar { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: linear-gradient(90deg, var(--title), #3a6ea5); color: #fff; font-weight: 600; padding: 3px 8px; }
+.titlebar button { padding: 0 7px; color: #000; }
+dialog .content { padding: 10px; max-height: 68vh; overflow: auto; }
+dialog .buttons { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px; }
+dialog .problem { color: #a40000; font-weight: 600; padding: 0 10px; max-width: 600px; white-space: pre-wrap; }
+.form { display: grid; grid-template-columns: max-content minmax(240px, 1fr); gap: 6px 10px; align-items: center; }
+.form textarea { min-height: 80px; }
+.form input[type=checkbox] { justify-self: start; }
+table.list { border-collapse: collapse; background: #fff; width: 100%; }
+.list th, .list td { border: 1px solid #c8c8c8; padding: 2px 6px; text-align: left; vertical-align: top; white-space: pre-wrap; overflow-wrap: break-word; max-width: 340px; }
+.list th { background: var(--face); }
+.list tr.added td { background: #e3f6dd; }
+.list tr.deleted td { background: #fbe0e0; }
+.list tr.modified td { background: #fff6d5; }
+.checks label { display: block; }
+
+#dxl { position: fixed; z-index: 20; right: 20px; bottom: 30px; width: min(780px, 94vw); height: min(620px, 82vh); display: flex; flex-direction: column; background: var(--face); border: 2px solid var(--title); box-shadow: 4px 6px 20px #0006; resize: both; overflow: hidden; min-width: 360px; min-height: 300px; }
+#dxl .tools { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 5px 8px; }
+#dxl .context { padding: 0 8px 3px; font-size: 12px; color: #333; }
+#dxl .source { flex: 3; display: flex; min-height: 0; margin: 0 8px; border: 1px solid #7f9db9; background: #fff; }
+#dxl .gutter, #dxl textarea { font: 12px/17px Consolas, Menlo, "Courier New", monospace; padding: 4px; margin: 0; }
+#dxl .gutter { text-align: right; color: #888; background: #f3f3f3; min-width: 38px; overflow: hidden; white-space: pre; user-select: none; }
+#dxl textarea { flex: 1; border: 0; resize: none; white-space: pre; overflow: auto; tab-size: 4; }
+#dxl .result { flex: 2; min-height: 0; overflow: auto; margin: 6px 8px 8px; background: #fff; border: 1px solid #7f9db9; padding: 4px; font: 12px/17px Consolas, Menlo, "Courier New", monospace; white-space: pre-wrap; }
+#dxl .result .fault { color: #a40000; font-weight: 700; cursor: pointer; }
+#dxl .result .note { color: #555; font-style: italic; }
+
+.written { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 4px 0; }
+.written .actions { display: inline-flex; gap: 6px; }
+.written .filename { font-weight: 700; overflow-wrap: anywhere; }
+.written .size { color: #555; font-size: 12px; }
+#dxl .result .files { white-space: normal; background: #e3f6dd; border: 1px solid #5a9e4b; padding: 4px 8px; margin-bottom: 6px; }
+#dxl .result .files .heading { font-weight: 700; }
+.filetext { margin: 6px 0 0; background: #fff; border: 1px solid #c8c8c8; padding: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/17px Consolas, Menlo, "Courier New", monospace; }
+table.report { margin-top: 6px; }
+
+/* Narrower windows: slimmer panes, so that the properties panel leaves the columns in view. */
+@media (max-width: 1100px) { #explorer { width: 170px; } #props { width: 260px; } }
+@media (max-width: 900px) {
+  #explorer { width: 160px; } #props { width: 240px; }
+  .grid td.main { min-width: 180px; } .grid td.trace { min-width: 105px; }
+}
+@media (min-width: 701px) and (max-width: 900px) and (min-height: 501px) {
+  #body:has(#props:not([hidden])) #explorer { display: none; }
+}

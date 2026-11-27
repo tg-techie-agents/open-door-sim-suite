@@ -1,0 +1,35 @@
+// For each formal module directly inside one folder or project: how many
+// objects, how many requirements, and the latest baseline. Changes nothing.
+
+// ==== settings: change these ================================================
+string FOLDER_PATH = "/Greenhouse Demo"
+// ============================================================================
+
+Folder here = folder(FOLDER_PATH)
+if (null here) {
+    print "no folder " FOLDER_PATH "\n"
+    halt
+}
+
+Item entry
+for entry in here do {
+    if (type(entry) != "Formal") continue
+    if (isDeleted entry) continue
+    Module m = read(fullName(entry), false)
+    if (null m) {
+        print "WARNING: cannot open " fullName(entry) "\n"
+        continue
+    }
+    int objects = 0, requirements = 0
+    Object o
+    for o in entire(m) do {
+        if (isDeleted o) continue
+        objects++
+        string body = o."Object Text"
+        if (body != "") requirements++
+    }
+    Baseline last = getMostRecentBaseline(m)
+    string latest = "none"
+    if (!null last) latest = major(last) "." minor(last) ""
+    print name(entry) ": " objects " objects, " requirements " with text, latest baseline " latest "\n"
+}

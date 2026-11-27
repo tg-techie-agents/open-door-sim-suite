@@ -1,0 +1,93 @@
+// Wording check: placeholders, vague words, and missing "shall".
+// A word list is a prompt to look, not a verdict. Reads only; changes nothing.
+
+pragma runLim, 0
+
+// ==== settings: change these ================================================
+string MODULES[] = {"/Greenhouse Demo/System Requirements", "/Greenhouse Demo/Subsystem Requirements"}
+string OUTPUT_FILE = "requirement_quality.csv"   // give a full path inside DOORS
+string PLACEHOLDERS[] = {"tbd", "tbr", "tbc"}
+string VAGUE[] = {"appropriate", "adequate", "should", "may", "possible", "etc", "and or", "user friendly", "as required", "sufficient", "quickly", "easily"}
+bool REQUIRE_SHALL = true
+// ============================================================================
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+// Lower case, with every run of other characters turned into one space.
+string words(string s) {
+    string result = " "
+    bool gap = true
+    int i
+    for (i = 0; i < length(s); i++) {
+        char c = s[i]
+        if (isalnum(c)) {
+            result = result c ""
+            gap = false
+        } else if (!gap) {
+            result = result " "
+            gap = true
+        }
+    }
+    if (!gap) result = result " "
+    return lower(result)
+}
+
+bool has(string haystack, string word) {
+    int offset, len
+    return findPlainText(haystack, " " word " ", offset, len, false)
+}
+
+Stream out = write OUTPUT_FILE
+out << "Module,Requirement,Requirement Text,Findings\n"
+
+int checked = 0, reported = 0
+int m, i
+for (m = 0; m < sizeof(MODULES); m++) {
+    Module reqs = read(MODULES[m], false)
+    if (null reqs) {
+        print "cannot open " MODULES[m] "\n"
+        halt
+    }
+    Object o
+    for o in entire(reqs) do {
+        if (isDeleted o) continue
+        if (table(o) || row(o) || cell(o)) continue
+        string body = o."Object Text"
+        if (body == "") continue
+        checked++
+
+        string plain = words(body)
+        string found = ""
+        for (i = 0; i < sizeof(PLACEHOLDERS); i++) {
+            if (has(plain, PLACEHOLDERS[i])) found = found "placeholder " PLACEHOLDERS[i] "; "
+        }
+        for (i = 0; i < sizeof(VAGUE); i++) {
+            if (has(plain, VAGUE[i])) found = found "vague: " VAGUE[i] "; "
+        }
+        if (REQUIRE_SHALL) {
+            if (!has(plain, "shall")) found = found "no shall; "
+        }
+        if (found != "") {
+            reported++
+            out << csv(MODULES[m]) "," csv(identifier(o)) "," csv(body) "," csv(found) "\n"
+        }
+    }
+}
+
+close out
+print "Requirements checked: " checked "\n"
+print "To look at: " reported "\n"
+print "Report written to " OUTPUT_FILE "\n"

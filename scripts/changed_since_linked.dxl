@@ -1,0 +1,78 @@
+// Links whose source or target was modified after the link was made.
+// This compares dates. It is NOT the DOORS suspect flag: it cannot know that
+// somebody already reviewed a change and cleared the suspicion.
+// Writes a CSV file. Reads only; changes nothing.
+
+pragma runLim, 0
+
+// ==== settings: change these ================================================
+// Modules where the links start (the lower level and the tests).
+string MODULES[] = {"/Greenhouse Demo/System Requirements", "/Greenhouse Demo/Subsystem Requirements", "/Greenhouse Demo/Verification"}
+string OUTPUT_FILE = "changed_since_linked.csv"   // give a full path inside DOORS
+string LINK_MODULE = "*"
+// ============================================================================
+
+string csv(string s) {
+    string result = "\""
+    // A spreadsheet runs a cell that starts like a formula.
+    if (length(s) > 0) {
+        string first = s[0:0]
+        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+    }
+    int i
+    for (i = 0; i < length(s); i++) {
+        string c = s[i:i]
+        if (c == "\"") c = "\"\""
+        result = result c
+    }
+    return result "\""
+}
+Stream out = write OUTPUT_FILE
+out << "Source,Target,Link Made,Source Modified,Target Modified,Changed\n"
+
+int checked = 0, reported = 0, unopened = 0
+int m
+for (m = 0; m < sizeof(MODULES); m++) {
+    Module sources = read(MODULES[m], false)
+    if (null sources) {
+        print "cannot open " MODULES[m] "\n"
+        halt
+    }
+    Object o
+    for o in entire(sources) do {
+        if (isDeleted o) continue
+        Link l
+        for l in o->LINK_MODULE do {
+            ModName_ holder = target(l)
+            if (null read(fullName(holder), false)) {
+                print "WARNING: cannot open " fullName(holder) "\n"
+                unopened++
+                continue
+            }
+            Object far = target(l)
+            if (null far) continue
+            if (isDeleted far) continue
+            checked++
+
+            Date made = l."Created On"
+            Date sourceChanged = o."Last Modified On"
+            Date targetChanged = far."Last Modified On"
+            string which = ""
+            if (sourceChanged > made) which = "source"
+            if (targetChanged > made) {
+                if (which != "") which = which " "
+                which = which "target"
+            }
+            if (which != "") {
+                reported++
+                out << csv(identifier(o)) "," csv(identifier(far)) "," csv(made "") "," csv(sourceChanged "") "," csv(targetChanged "") "," csv(which) "\n"
+            }
+        }
+    }
+}
+
+close out
+print "Links checked: " checked "\n"
+print "Changed since linked: " reported "\n"
+if (unopened > 0) print "INCOMPLETE: some linked modules could not be opened; see the warnings above\n"
+print "Report written to " OUTPUT_FILE "\n"

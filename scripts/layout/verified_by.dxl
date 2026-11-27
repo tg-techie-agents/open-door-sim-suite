@@ -1,0 +1,16 @@
+// Layout DXL column: the tests linked to each object, and their status.
+// In DOORS: new column, Layout DXL. Change the two settings.
+string TEST_LINKS = "/Greenhouse Demo/verifies"
+string STATUS_ATTRIBUTE = "Verification Status"
+
+ModName_ other
+for other in obj<-TEST_LINKS do read(fullName(other), false)
+
+Link l
+for l in obj<-TEST_LINKS do {
+    Object linked = source(l)
+    if (null linked) continue
+    if (isDeleted linked) continue
+    string status = linked.STATUS_ATTRIBUTE ""
+    display(identifier(linked) "  " status)
+}
