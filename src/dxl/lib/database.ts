@@ -126,7 +126,42 @@ export function in_project(rt: Runtime, module_id: number, project: number): boo
   return project_of(rt, parent_id(rt, module_id)) === project;
 }
 
+// `purge(x)` and `hardDelete(m)`: gone for good, and the handle becomes null.
+function purge_item(rt: Runtime, ref: Ref, soft_first: boolean): string {
+  const item_id = rt.need(ref.get(), "handle");
+  if (open_modules(rt, () => true).some((m) => m === item_id || rt.store.path(m).startsWith(
+    rt.store.path(item_id) + "/"))) {
+    throw new Fault("close the modules in it before purging it");
+  }
+  for (let at: number | null = rt.folder; at !== null; at = parent_id(rt, at)) {
+    if (at === item_id) throw new Fault("the current folder is inside what would be purged");
+  }
+  const message = attempt(() => rt.store.transaction(() => {
+    if (soft_first && !rt.store.item(item_id).deleted) rt.store.delete_item(item_id);
+    rt.store.purge_item(item_id);
+  }));
+  if (!message) ref.set(null);
+  return message;
+}
+
+function register_removal(lib: Library): void {
+  for (const type_name of ["Item", "Folder", "Project", "ModName_"]) {
+    lib.add("purge", ["&" + type_name], "string", (rt: Runtime, ref: Ref) => purge_item(rt, ref, false));
+  }
+  lib.add("hardDelete", ["&ModName_"], "bool", (rt: Runtime, ref: Ref) => !purge_item(rt, ref, true));
+
+  const convert = (rt: Runtime, item_id: any, project: boolean, ref: Ref) => attempt(() => {
+    rt.store.set_project(rt.need(item_id, project ? "Folder" : "Project"), project);
+    ref.set(item_id);
+  });
+  lib.add("convertFolderToProject", ["Folder", "&Project"], "string",
+    (rt: Runtime, f: any, ref: Ref) => convert(rt, f, true, ref));
+  lib.add("convertProjectToFolder", ["Project", "&Folder"], "string",
+    (rt: Runtime, p: any, ref: Ref) => convert(rt, handle(rt, "Project", p), false, ref));
+}
+
 export function register_hierarchy(lib: Library): void {
+  register_removal(lib);
   for (const type_name of ["Folder", "Project", "Item", "Database_", "AllFolder_"]) lib.type(type_name);
 
   for (const t of NAMED) {
@@ -234,6 +269,10 @@ export function open_as(mode: string) {
     if (found === null) return null;
     if (rt.store.item(found).kind === "link") {
       throw new Fault(`opening a link module (${name}) is not supported here`);
+    }
+    if (mode !== "read" && !rt.store.may_edit(found)) {
+      throw new Fault(`${name}: ${rt.store.user} may not change anything in this module, and what DOORS does when it `
+        + `is then opened with ${mode}() is not documented; open it with read()`);
     }
     const fresh = !rt.opened.has(found);
     const held = rt.opened.get(found);
@@ -634,6 +673,16 @@ export function register_objects(lib: Library): void {
   lib.add("move", ["Object", "LastBelow_"], "void",
     (rt: Runtime, o: any, to: any) => move(rt, o, new Map([["parent", to]])));
   lib.add("softDelete", ["Object"], "void", soft_delete);
+  lib.add("hardDelete", ["Object"], "void", (rt: Runtime, o: any) => {
+    rt.editing(rt.obj(o).module_id);
+    rt.store.purge_object(o);
+    if (rt.object !== null && equals(rt.object, o)) rt.object = null;
+  });
+  lib.add("gotoObject", ["int", "Module"], "Object", (rt: Runtime, absno: number, m: any) => {
+    const found = object_by_number(rt, absno, m);
+    if (found !== null) rt._current.set(found.module_id, found);
+    return found;
+  });
   lib.add("undelete", ["Object"], "string", undelete_object);
   lib.add("purgeObjects_", ["Module"], "string", purge_objects);
   lib.add("flushDeletions", [], "void", (rt: Runtime) => null); // deletions here are immediate
@@ -654,12 +703,25 @@ export function register_objects(lib: Library): void {
 // -- attribute values ---------------------------------------------------------
 
 export function get_object_value(rt: Runtime, obj: any, name: string): string {
-  return rt.store.value(rt.obj(obj), name);
+  const value = rt.store.value(rt.obj(obj), name);
+  // only an object older than the attribute's default holds nothing at all of its own
+  if (value === "") {
+    const definition = rt.store.attribute(obj.module_id, name);
+    if (definition?.default && !definition.inherit && !rt.store.has_own_value(obj, name)) {
+      throw new Fault(`${_repr(name)}: this object was there before the attribute had its default, and what DOORS `
+        + "then shows is not documented; give it a value first");
+    }
+  }
+  return value;
 }
 
 export function set_object_value(rt: Runtime, obj: any, name: string, text: string): void {
   if (computing(rt)) return assign_own(rt, rt.obj(obj), name, text);
   rt.editing(rt.obj(obj).module_id);
+  if (text === "" && rt.store.attribute(obj.module_id, name)?.inherit) {
+    throw new Fault(`${_repr(name)} is inherited, and whether an empty value is kept or the attribute goes back to `
+      + "inheriting is not verified");
+  }
   rt.store.set_value(obj, name, text);
 }
 
@@ -760,6 +822,11 @@ function register_rich_text(lib: Library): void {
 
 export function register_values(lib: Library): void {
   register_rich_text(lib);
+  lib.add("getBoundedAttr", ["attr", "int"], "string", (rt: Runtime, a: AttrRef, n: number) => {
+    const characters = Array.from(a.get() as string);
+    if (n < 0) throw new Fault("getBoundedAttr: the number of characters cannot be negative");
+    return characters.slice(0, n).join("");
+  });
   lib.operator("+=", "attr", "string", "void", change_option("+=", true));
   lib.operator("-=", "attr", "string", "void", change_option("-=", false));
   lib.attributes("Object", get_object_value, set_object_value);

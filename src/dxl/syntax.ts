@@ -4,6 +4,8 @@
 // only types can say whether it is a call or a concatenation, so the checker
 // decides. Nodes are arrays: [kind, line, ...].
 
+import { unavailable } from "./unavailable.ts";
+
 export type Node = any[];
 
 export class DxlError extends Error {
@@ -46,9 +48,9 @@ export const TYPES: Set<string> = new Set(["int", "string", "bool", "char", "rea
   "Object", "Module", "Link", "LinkRef", "ModName_", "Stream", "AttrDef", "AttrType",
   "Buffer", "Skip", "Regexp", "Date", "Range", "Folder", "Project", "Item",
   "Baseline", "History", "HistoryType", "AttrBaseType", "View", "Column", "Filter", "Sort", "Array",
-  "LinkFilter", "ModuleVersion", "Justification",
+  "LinkFilter", "ModuleVersion", "Justification", "Stat", "Locale", "LinkModuleDescriptor", "Linkset", "Permission", "AccessRec",
   "ViewDef",
-  "DB", "DBE", "Icon"]);
+  "DB", "DBE", "Icon", "Sensitivity"]);
 // Reserved by the manual; none may name a variable or function.
 export const RESERVED: Set<string> = new Set(
   ("and bool break by case char const continue default do else enum for if in int "
@@ -81,6 +83,8 @@ const TOKEN = new RegExp([
   // a string may run over lines; a backslash at the end of a line has no documented meaning
   String.raw`(?<string>"(?:[^"\\]|\\[^\r\n])*")`,
   String.raw`(?<char>'(?:[^'\\\n]|\\[0-7]{1,3}|\\[^\r\n])')`,
+  // operators DXL has and this engine does not: refused by name
+  String.raw`(?<missing><<=|>>=|\^\^|\^=|<>|:=|=>|\.\.|\\)`,
   String.raw`(?<op><<|>>|<-|->|<\?|>\?|<=|>=|==|!=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|\|=|&=|[|~^\-+*\/%<>=!\(\)\{\}\[\],;.:&?])`,
 ].join("|"), "suy");
 
@@ -116,6 +120,15 @@ export function tokenize(source: string): Token[] {
     let kind = "";
     for (const name in m.groups) if (m.groups[name] !== undefined) { kind = name; break; }
     let text = m[0];
+    if (kind === "missing") {
+      // after `::` the parser names the definition it refuses
+      if (tokens.slice(-2).map((t) => t.text).join("") !== "::") {
+        throw new DxlError(line, `${text} is a DXL operator this practice suite does not offer (reason: not built)`);
+      }
+      kind = "op";
+      text = text[0];
+      TOKEN.lastIndex = pos + 1;
+    }
     pos = TOKEN.lastIndex;
     if (kind === "space" || kind === "block") {
       spaced = true;
@@ -221,6 +234,10 @@ export class Parser {
     if (this.tok.kind === "nl" || this.tok.kind === "end" || this.at(";")) {
       this.skip_newlines();
     } else if (!(this.at("}", "else", "elseif") || this.tokens[this.i - 1].text === "}")) {
+      if (this.at(",")) {
+        throw new DxlError(this.tok.line, "a comma list after a call written without parentheses is not offered: "
+          + "DXL reads `f a, b` as `(f a), b`. Use parentheses, or one statement for each value");
+      }
       this.fail("expected end of statement");
     }
   }
@@ -248,6 +265,9 @@ export class Parser {
       const name = this.next().text;
       this.end_statement();
       return ["include", line, name];
+    }
+    if (this.at("switch", "struct", "union", "enum")) {
+      throw new DxlError(line, `${this.tok.text} is a word DXL reserves but DOORS does not support in scripts`);
     }
     if (this.accept("const")) return this.statement();
     if (this.accept("if") || this.accept("elseif")) {
@@ -418,6 +438,8 @@ export class Parser {
     while (!this.accept(")")) {
       if (TYPES.has(this.tok.text)) type_name = this.next().text;
       const by_ref = Boolean(this.accept("&"));
+      const missing = this.tok.kind === "name" ? unavailable(this.tok.text) : null;
+      if (type_name === null && missing) throw new DxlError(this.tok.line, missing);
       if (type_name === null || this.tok.kind !== "name") this.fail("expected 'type name'");
       const param = this.next().text;
       const array = Boolean(this.accept("["));

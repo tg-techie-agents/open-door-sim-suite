@@ -336,9 +336,8 @@ progressStop`, demo(), { write: () => {} }, null, ".", null, false, false, null,
     refused(BOX + "if (true) block b", /only offered as a statement of the script's top level/, 2);
     refused(BOX + "void f() {\n  block b\n}", /top level/, 3);
     refused(BOX + "{\n  block b\n}", /top level/, 3);
-    refused(BOX + "canvas(b, 10, 10, null)", /canvas belongs to the parts of dialog boxes/, 2);
-    refused(BOX + "DBE t = treeView(b, 0, 1, 1)", /treeView belongs to/, 2);
-    refused(BOX + "DBE f = frame(b, \"f\")", /frame belongs to/, 2);
+    refused(BOX + "DBE t = toolBar(b)", /toolBar belongs to/, 2);
+    refused(BOX + "DBE h = htmlView(b, 1, 1)", /htmlView/, 2);
     refused(BOX + 'DBE f = fileName(b, "x.csv")', /incorrect arguments for function fileName/, 2);
     refused(BOX + "void f(DBE x) {}\nok(b, f)", /incorrect arguments for function ok \(DB, a function\)/, 3);
     refused(BOX + 'button(b, "x", 3)', /incorrect arguments for function button/, 2);

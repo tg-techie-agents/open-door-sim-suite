@@ -13,11 +13,18 @@ import { DialogSession, open_dialogs, run_steps } from "./lib/dialogs.ts";
 import type { DialogHost } from "./lib/dialogs.ts";
 import { build_library } from "./lib/index.ts";
 import { load_view } from "./lib/views.ts";
+import { name_status } from "./unavailable.ts";
+import type { NameStatus } from "./unavailable.ts";
 import { Fault, Halt, Runtime, compare_text } from "./runtime.ts";
 import { DxlError, Parser, py_repr } from "./syntax.ts";
 
 export { DialogSession, DxlError, VirtualDisk };
-export type { DialogHost };
+export type { DialogHost, NameStatus };
+
+/** Every DXL name this suite knows, with whether it is offered and why not. */
+export function coverage(): NameStatus[] {
+  return name_status([build_library(), build_library(true)]);
+}
 
 export class RunResult {
   unsaved: string[]; // paths of modules changed but never save()d

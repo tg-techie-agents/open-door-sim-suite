@@ -8,7 +8,7 @@
 // There is one user here, who may do everything the database itself allows.
 // Where DOORS behaviour is not documented, the script is stopped.
 
-import { Obj, _repr } from "../../store.ts";
+import { Obj, RIGHTS, _repr } from "../../store.ts";
 import { STANDARD_VIEW, view_columns } from "../../views.ts";
 import type { Justification, ViewColumn } from "../../views.ts";
 import { check_layout, layout } from "../index.ts";
@@ -360,8 +360,16 @@ export function load_view(rt: Runtime, module_id: any, name: string): boolean {
   return true;
 }
 
+// What a ViewDef asks to be kept; null: the plain `save(view)`, which refuses
+// where DOORS would go by settings it holds.
+export type ViewSettings = { useColumns?: boolean; useFiltering?: boolean; useSorting?: boolean };
+
 function save_view(rt: Runtime, view: any): void {
-  const module_id = current_module(rt);
+  save_view_in(rt, current_module(rt), view, null);
+}
+
+export function save_view_in(rt: Runtime, target: any, view: any, settings: ViewSettings | null): void {
+  const module_id = rt.opened_module(target);
   const { name } = view_in(rt, module_id, view);
   const window = window_of(rt, module_id);
   if (rt.store.is_baseline(module_id)) throw new Fault("a view cannot be saved in a baseline here");
@@ -370,9 +378,22 @@ function save_view(rt: Runtime, view: any): void {
   }
   if (name === STANDARD_VIEW) throw new Fault("the Standard view cannot be altered; save under another name");
   if (!name) throw new Fault("a view needs a name");
-  if (filtering(rt, module_id) || sorting(rt, module_id)) {
-    throw new Fault("whether DOORS keeps the filter or sort with this view depends on view settings that "
-      + "are not offered here; turn filtering and sorting off before save");
+  if (settings === null) {
+    if (filtering(rt, module_id) || sorting(rt, module_id)) {
+      throw new Fault("whether DOORS keeps the filter or sort with this view depends on its view definition; "
+        + "turn filtering and sorting off, or save(view, viewDef) saying useFiltering and useSorting");
+    }
+  } else {
+    if (settings.useColumns !== true) {
+      throw new Fault("only a view definition with useColumns true can be saved here");
+    }
+    for (const [on, kept, what] of [[filtering(rt, module_id), settings.useFiltering, "useFiltering"],
+      [sorting(rt, module_id), settings.useSorting, "useSorting"]] as const) {
+      if (on && kept !== false) {
+        throw new Fault(`a script's filter or sort cannot be kept in a view here: write ${what}(viewDef, false), `
+          + "or turn it off before save");
+      }
+    }
   }
   const unsized = window.columns.findIndex((c) => c.width === null);
   if (unsized >= 0) {
@@ -381,6 +402,7 @@ function save_view(rt: Runtime, view: any): void {
   rt.store.save_view(module_id, name, {
     layout: window.columns.map((c) => ({ ...c })), filter: null, sort: null,
     in_links: window.in_links, out_links: window.out_links,
+    ...(settings ? { settings } : {}),
   });
   window.name = name;
 }
@@ -478,6 +500,18 @@ function register_display(lib: Library): void {
 
 // -- access -------------------------------------------------------------------
 
+const RIGHT_ASKED: Record<string, number> = { canRead: RIGHTS.read, canModify: RIGHTS.modify,
+  canWrite: RIGHTS.modify, canCreate: RIGHTS.create, canDelete: RIGHTS.delete, canControl: RIGHTS.control };
+
+function allowed(rt: Runtime, thing: any, call: string): boolean {
+  const answer = rt.store.may(thing, RIGHT_ASKED[call]);
+  if (answer === "unknown") {
+    throw new Fault(`${call}: the answer depends on which of the named groups ${rt.store.user} belongs to; `
+      + `give ${rt.store.user} an access entry to say`);
+  }
+  return answer === "yes";
+}
+
 function not_a_baseline(rt: Runtime, module_id: number): void {
   if (rt.store.is_baseline(module_id)) {
     throw new Fault("what DOORS answers for change rights in a baseline is not verified");
@@ -496,7 +530,7 @@ function attribute_right(rt: Runtime, module_id: any, name: string, changes: boo
     not_a_baseline(rt, module_id);
     if (system) throw new Fault(`what DOORS answers for changing the system attribute ${_repr(name)} is not verified`);
   }
-  return true;
+  return allowed(rt, module_id, changes ? "canModify" : "canRead");
 }
 
 function register_access(lib: Library): void {
@@ -504,7 +538,7 @@ function register_access(lib: Library): void {
 
   for (const type_name of ["Item", "Folder"]) {
     for (const name of rights) {
-      lib.add(name, [type_name], "bool", (rt, i) => { rt.need(i, type_name); return true; });
+      lib.add(name, [type_name], "bool", (rt, i) => allowed(rt, rt.need(i, type_name), name));
     }
   }
 
@@ -512,7 +546,7 @@ function register_access(lib: Library): void {
     lib.add(name, ["Module"], "bool", (rt, m) => {
       rt.opened_module(m);
       if (name !== "canRead") not_a_baseline(rt, m);
-      return true;
+      return allowed(rt, m, name);
     });
     lib.add(name, ["Object"], "bool", (rt, o) => {
       rt.obj(o);
@@ -523,7 +557,7 @@ function register_access(lib: Library): void {
           throw new Fault(`${name}(Object) needs the module open with edit()`);
         }
       }
-      return true;
+      return allowed(rt, o, name);
     });
   }
 
@@ -532,7 +566,8 @@ function register_access(lib: Library): void {
     lib.add(name, ["Module", "string"], "bool", (rt, m, a) => attribute_right(rt, m, a, changes, null));
     lib.add(name, ["attr"], "bool", (rt, a: AttrRef) => {
       if (a.owner_type === "Object") {
-        return attribute_right(rt, rt.obj(a.owner).module_id, a.name, changes, "object");
+        const answer = attribute_right(rt, rt.obj(a.owner).module_id, a.name, changes, "object");
+        return changes ? allowed(rt, a.owner, "canModify") : answer; // an object may have rights of its own
       }
       if (a.owner_type === "Module") return attribute_right(rt, a.owner, a.name, changes, "module");
       a.get(); // a link: that the attribute exists

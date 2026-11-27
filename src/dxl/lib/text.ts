@@ -388,6 +388,9 @@ function _buffers(lib: any): void {
       (rt: any, _: any, b: any) => _is_null_buffer(b) === wanted);
   }
 
+  // every newline gets the carriage return Windows expects, once
+  lib.add("getDOSstring", ["Buffer"], "Buffer",
+    (rt: any, b: any) => new Buffer(_text_of(rt, b).replace(/(?<!\r)\n/g, "\r\n")));
   lib.add("create", [], "Buffer", (rt: any) => new Buffer(""));
   lib.add("create", ["int"], "Buffer", (rt: any, size: number) => new Buffer(""));
   lib.add("delete", ["&Buffer"], "void", _delete_buffer);
@@ -1110,6 +1113,35 @@ function _dates(lib: any): void {
   lib.add("dateAndTime", ["Date"], "Date", (rt: any, d: any) => new DxlDate(_moment(d), true));
 }
 
+// -- the user's locale ------------------------------------------------------
+
+/** The one locale here: the one dates are already read and written in. A
+ * function given it does what it does when no locale is given. */
+const USER_LOCALE = Object.freeze({ locale: "user" });
+
+function _locales(lib: any): void {
+  lib.type("Locale");
+  lib.add("userLocale", [], "Locale", () => USER_LOCALE);
+  const given = (rt: any, l: any) => { rt.need(l, "Locale"); };
+  lib.add("stringOf", ["Date", "Locale"], "string", (rt: any, d: any, l: any) => {
+    given(rt, l);
+    return rt.text("Date", d);
+  });
+  lib.add("stringOf", ["Date", "Locale", "string"], "string", (rt: any, d: any, l: any, layout: string) => {
+    given(rt, l);
+    _moment(d);
+    return layout ? d.format(layout) : String(d);
+  });
+  lib.add("date", ["string", "Locale"], "Date", (rt: any, text: string, l: any) => {
+    given(rt, l);
+    return _date(rt, text);
+  });
+  lib.add("date", ["string", "Locale", "string"], "Date", (rt: any, text: string, l: any, layout: string) => {
+    given(rt, l);
+    return _date_with_format(rt, text, layout);
+  });
+}
+
 // -- Stream files ----------------------------------------------------------
 
 /** Text with every line ending "\n" (Files.readText has already
@@ -1323,8 +1355,35 @@ function _streams(lib: any): void {
     _file_operation((files, a, b) => files.copy(a, b), true));
   lib.add("tempFileName", [], "string", _temp_file_name);
   lib.add("currentDirectory", [], "string", (rt: any) => rt.files.getcwd());
+  lib.add("mkdir", ["string"], "void", (rt: any, path: string) => rt.files.mkdir(path));
   lib.add("directory", ["string"], "Directory_", (rt: any, path: string) => rt.files.read(path));
   lib.loop("Directory_", "string", (rt: any, path: string) => rt.files.list(path));
+}
+
+// -- status handles -----------------------------------------------------------
+
+/** What is at a path, as far as this suite can tell: a folder or a file. */
+type Status = { folder: boolean };
+
+function _status(rt: any, path: string): Status | null {
+  const full = rt.files.read(path); // refuses a path outside what a script may read
+  if (!rt.files.exists(full)) return null;
+  return { folder: rt.files.isdir(full) };
+}
+
+function _live_status(s: Status | null): Status {
+  if (s === null) throw new Fault("null Stat handle");
+  return s;
+}
+
+/** The existence, folder and file tests. Dates, sizes, owners and modes would
+ * not be those of the computer DOORS runs on, so they are not offered. */
+function _statuses(lib: any): void {
+  lib.type("Stat");
+  lib.add("create", ["string"], "Stat", _status);
+  lib.add("delete", ["Stat"], "void", () => {});
+  lib.add("directory", ["Stat"], "bool", (_rt: any, s: Status | null) => _live_status(s).folder);
+  lib.add("regular", ["Stat"], "bool", (_rt: any, s: Status | null) => !_live_status(s).folder);
 }
 
 // -- dynamic arrays --------------------------------------------------------
@@ -1399,5 +1458,7 @@ export function register(lib: any): void {
   _skips(lib);
   _dates(lib);
   _streams(lib);
+  _statuses(lib);
+  _locales(lib);
   _arrays(lib);
 }

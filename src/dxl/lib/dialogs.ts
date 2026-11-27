@@ -16,9 +16,11 @@
 // What the manual does not settle is refused where it is met rather than guessed.
 
 import type { Library } from "../registry.ts";
-import { Return } from "../compiler.ts";
 import { Callback, Fault, Halt } from "../runtime.ts";
 import { confirm } from "./core.ts";
+import { call_back, choose_path, empty_tree, follow, menu_text, paint, part_spec, part_text, put_inside,
+  register_parts } from "./dialog-parts.ts";
+import type { Canvas, Menu, Popup, Slider, Status, Tree } from "./dialog-parts.ts";
 
 const STATE = "dialogs"; // the key in rt.state
 const MAX_ROWS = 20000;
@@ -29,8 +31,9 @@ export type Progress = { title: string; message: string; position: number; limit
 /** What shows the boxes. `interactive`: a person can press their buttons. */
 export type DialogHost = { interactive: boolean; progress?: (progress: Progress | null) => void };
 
-type Kind = "label" | "separator" | "field" | "text" | "fileName" | "toggle" | "radioBox" | "checkBox"
-  | "choice" | "list" | "multiList" | "listView" | "button";
+export type Kind = "label" | "separator" | "field" | "text" | "fileName" | "toggle" | "radioBox" | "checkBox"
+  | "choice" | "list" | "multiList" | "listView" | "button"
+  | "frame" | "tab" | "splitter" | "treeView" | "slider" | "statusBar" | "menuBar" | "canvas";
 
 type Place = "below" | "beside" | "right" | "opposite";
 
@@ -42,6 +45,7 @@ const row_of = (text: string): Row => ({ cells: [text], selected: false, checked
 
 type Callbacks = {
   press?: Callback; select?: Callback; activate?: Callback; deselect?: Callback; check?: Callback;
+  expand?: Callback; repaint?: Callback;
 };
 
 let next_id = 1;
@@ -70,6 +74,14 @@ export class Element {
   is_default = false;
   unsettled = false; // a choice given new values: its selection is not known
   callbacks: Callbacks = {};
+  parent: Element | null = null; // the frame or tab strip it is inside
+  said_inside = false;
+  menus: Menu[] = [];
+  tree: Tree | null = null;
+  slider: Slider | null = null;
+  status: Status | null = null;
+  canvas: Canvas | null = null;
+  pair: [Element, Element] | null = null; // what a splitter stands between
 
   constructor(box: Box, kind: Kind, label: string) {
     this.box = box;
@@ -117,6 +129,8 @@ export class Dialogs {
   messages: Message[] = []; // message boxes since the host last looked
   progress: Progress | null = null;
   callback: "DB" | "DBE" | null = null; // the kind of callback running
+  painting: Element | null = null; // the canvas whose repaint callback is running
+  popup: Popup | null = null; // a menu opened, until the host has been told
   blocked: { box: Box; steps: Array<(env: any) => any>; env: any } | null = null;
   _told = 0;
 
@@ -186,11 +200,15 @@ export function run_steps(dialogs: Dialogs, steps: Array<(env: any) => any>, env
 
 export type DialogEvent = {
   box: number;
-  kind: "press" | "close" | "select" | "activate" | "check";
+  kind: "press" | "close" | "select" | "activate" | "check" | "expand" | "collapse" | "menu" | "choose";
+  path?: string | null; // of a tree view item
+  menu?: number | null;
+  entry?: number | null;
   element?: number | null;
   row?: number | null;
   // what the person has typed and chosen, for every element they can change
-  values?: Array<{ id: number; text?: string; on?: boolean; selected?: number[]; checked?: number[] }>;
+  values?: Array<{ id: number; text?: string; on?: boolean; selected?: number[]; checked?: number[];
+    path?: string; position?: number }>;
 };
 
 export type Host = {
@@ -235,7 +253,10 @@ export class DialogSession {
   spec(): any {
     const messages = this.dialogs.messages;
     this.dialogs.messages = [];
+    const popup = this.dialogs.popup;
+    this.dialogs.popup = null;
     return {
+      popup,
       session: this.id,
       open: this.open,
       messages,
@@ -281,6 +302,11 @@ export class DialogSession {
             if (!(e instanceof Halt)) throw e;
           }
         }
+        try {
+          paint(rt, dialogs, dialogs.boxes);
+        } catch (e) {
+          if (!(e instanceof Halt)) throw e;
+        }
       });
     } finally {
       dialogs.callback = null;
@@ -299,8 +325,17 @@ export class DialogSession {
       return;
     }
     const element = [...box.elements, ...box.buttons].find((e) => e.id === event.element);
-    if (!element || element.inactive || element.hidden) return;
+    if (!element || !usable(element)) return;
     const callbacks = element.callbacks;
+    if (event.kind === "menu" || event.kind === "choose") {
+      this.menu(element, event);
+      return;
+    }
+    if (event.kind === "expand" || event.kind === "collapse") {
+      dialogs.callback = "DBE";
+      this.expand(element, event);
+      return;
+    }
     if (event.kind === "press") {
       if (element.standard) {
         dialogs.callback = "DB";
@@ -335,24 +370,57 @@ export class DialogSession {
     if (wanted) this.call(wanted, [element]);
   }
 
-  call(callback: Callback, args: any[]): void {
-    const fn = callback.target;
-    if (!fn.body) throw new Fault(`the callback ${fn.name} has no body`);
-    const local = new Map();
-    fn.param_vars.forEach((v: any, i: number) => local.set(v, args[i]));
-    try {
-      this.rt.tick(0);
-      fn.body([callback.globals, local]);
-    } catch (e) {
-      if (!(e instanceof Return)) throw e;
+  /** A menu opened (ask how each entry stands) or one of its entries picked. */
+  menu(element: Element, event: DialogEvent): void {
+    const menu = element.menus[event.menu ?? -1];
+    if (!menu) return;
+    this.dialogs.callback = "DBE";
+    const standing = (i: number): number => {
+      const answer = this.call(menu.sensitive, [i]);
+      if (typeof answer !== "number") throw new Fault(`the callback ${menu.sensitive.target.name} returned nothing`);
+      return answer;
+    };
+    if (event.kind === "menu") {
+      this.dialogs.popup = { element: element.id, menu: event.menu!, states: menu.entries.map((_, i) => standing(i)) };
+      return;
     }
+    const at = event.entry ?? -1;
+    if (Number.isInteger(at) && at >= 0 && at < menu.entries.length && standing(at) !== 0) this.call(menu.pick, [at]);
   }
+
+  expand(element: Element, event: DialogEvent): void {
+    if (element.kind !== "treeView") return;
+    let nodes = element.tree!.root;
+    for (const part of (event.path ?? "").split("/")) {
+      const next = nodes.kids.get(part);
+      if (!next) return;
+      nodes = next;
+    }
+    const ask = element.callbacks.expand;
+    if (event.kind === "expand" && ask) {
+      const answer = this.call(ask, [element, event.path]);
+      if (typeof answer !== "boolean") throw new Fault(`the callback ${ask.target.name} returned nothing`);
+      if (!answer) return;
+    }
+    nodes.open = event.kind === "expand";
+  }
+
+  call(callback: Callback, args: any[]): any {
+    return call_back(this.rt, callback, args);
+  }
+}
+
+/** Neither it nor what it is inside is hidden, and it is not greyed. */
+function usable(e: Element): boolean {
+  if (e.inactive) return false;
+  for (let at: Element | null = e; at; at = at.parent) if (at.hidden) return false;
+  return true;
 }
 
 function apply_values(dialogs: Dialogs, values: NonNullable<DialogEvent["values"]>): void {
   const live = new Map<number, Element>();
   for (const box of dialogs.boxes) {
-    if (box.on_screen) for (const e of box.elements) if (!e.inactive && !e.hidden) live.set(e.id, e);
+    if (box.on_screen) for (const e of box.elements) if (usable(e)) live.set(e.id, e);
   }
   for (const value of values) {
     const element = live.get(value?.id);
@@ -363,6 +431,19 @@ function apply_values(dialogs: Dialogs, values: NonNullable<DialogEvent["values"
       element.text = value.text;
     }
     if (kind === "toggle" && typeof value.on === "boolean") element.on = value.on;
+    if (element.slider && Number.isInteger(value.position)) {
+      element.slider.value = Math.min(element.slider.max, Math.max(element.slider.min, value.position!));
+    }
+    if (element.tree && typeof value.path === "string" && value.path && value.path !== element.tree.chosen) {
+      try {
+        choose_path(element, value.path);
+      } catch (e) {
+        if (!(e instanceof Fault)) throw e;
+      }
+    }
+    if (kind === "tab" && Array.isArray(value.selected) && rows[value.selected[0]]) {
+      rows.forEach((r, i) => { r.selected = i === value.selected![0]; });
+    }
     if (Array.isArray(value.selected)
       && ["choice", "radioBox", "checkBox", "list", "multiList", "listView"].includes(kind)) {
       const wanted = new Set(value.selected.filter((i) => Number.isInteger(i) && i >= 0 && i < rows.length));
@@ -400,6 +481,7 @@ function events_of(e: Element): string[] {
 
 function element_spec(e: Element): any {
   return {
+    ...part_spec(e),
     id: e.id, kind: e.kind, label: e.kind === "label" ? "" : shown_label(e.label), text: e.kind === "label" ? e.label : e.text,
     on: e.on, rows: e.rows.map((r) => ({ cells: [...r.cells], selected: r.selected, checked: r.checked })),
     columns: e.columns.map((c) => ({ ...c })), multi: e.multi, checkboxes: e.checkboxes, editable: e.editable,
@@ -423,13 +505,25 @@ export function render_text(box: Box): string {
     for (const r of rows.slice(0, 15)) lines.push(`|     ${one(r)}`);
     if (rows.length > 15) lines.push(`|     ... ${rows.length - 15} more`);
   };
-  for (const e of box.elements) {
-    if (e.hidden) continue;
+  const rank = (e: Element) => (e.kind === "menuBar" ? 0 : e.kind === "statusBar" ? 2 : 1);
+  const order: Array<[Element, number]> = [];
+  const gather = (parent: Element | null, depth: number) => {
+    for (const e of box.elements.filter((x) => x.parent === parent).sort((a, b) => rank(a) - rank(b))) {
+      if (e.hidden) continue;
+      order.push([e, depth]);
+      gather(e, depth + 1);
+    }
+  };
+  gather(null, 0);
+  for (const [e, depth] of order) {
+    const from = lines.length;
     const name = shown_label(e.label);
     const head = name ? `${name.replace(/:\s*$/, "")}: ` : "";
     const off = e.inactive ? " (inactive)" : "";
     const mark = (r: Row) => (r.selected ? "(*) " : "( ) ") + r.cells.join(" | ");
-    if (e.kind === "label") lines.push(`|  ${e.label}`);
+    const part = part_text(e, name);
+    if (part) lines.push(...part.map((l) => `|  ${l}`));
+    else if (e.kind === "label") lines.push(`|  ${e.label}`);
     else if (e.kind === "separator") lines.push("|  " + "-".repeat(24));
     else if (e.kind === "button") lines.push(`|  <${name}>${off}`);
     else if (e.kind === "toggle") lines.push(`|  [${e.on ? "x" : " "}] ${name}${off}`);
@@ -443,10 +537,11 @@ export function render_text(box: Box): string {
     } else if (e.kind === "radioBox") {
       lines.push(`|  ${head}${e.rows.map(mark).join("  ")}${off}`);
     } else {
-      lines.push(`|  ${head}${e.kind}, ${e.rows.length} ${e.rows.length === 1 ? "item" : "items"}${off}`);
+      lines.push(`|  ${head}${e.kind}, ${e.rows.length} ${e.rows.length === 1 ? "item" : "items"}${off}${menu_text(e)}`);
       if (e.columns.length) lines.push(`|     ${e.columns.map((c) => c.title).join(" | ")}`);
       some(e.rows, mark);
     }
+    if (depth) for (let i = from; i < lines.length; i++) lines[i] = lines[i].replace(/^\|  /, "|  " + "  ".repeat(depth));
   }
   const buttons = box.buttons.filter((b) => !b.hidden).map((b) => `<${shown_label(b.label)}>`);
   if (box.close_button) buttons.push("<Close>");
@@ -456,13 +551,13 @@ export function render_text(box: Box): string {
 
 // -- the DXL functions ---------------------------------------------------------
 
-function box_of(rt: any, value: any): Box {
+export function box_of(rt: any, value: any): Box {
   const box: Box = rt.need(value, "DB");
   if (box.destroyed) throw new Fault("the dialog box has been destroyed");
   return box;
 }
 
-function element_of(rt: any, value: any, ...kinds: Kind[]): Element {
+export function element_of(rt: any, value: any, ...kinds: Kind[]): Element {
   const element: Element = rt.need(value, "DBE");
   if (element.box.destroyed) throw new Fault("the element's dialog box has been destroyed");
   if (kinds.length && !kinds.includes(element.kind)) {
@@ -471,7 +566,7 @@ function element_of(rt: any, value: any, ...kinds: Kind[]): Element {
   return element;
 }
 
-function add_element(rt: any, box_value: any, kind: Kind, label: string, standard: "ok" | "apply" | null = null): Element {
+export function add_element(rt: any, box_value: any, kind: Kind, label: string, standard: "ok" | "apply" | null = null): Element {
   const box = box_of(rt, box_value);
   if (box.realized) throw new Fault("add every element before the dialog box is realized or shown");
   const element = new Element(box, kind, label ?? "");
@@ -486,7 +581,7 @@ function add_element(rt: any, box_value: any, kind: Kind, label: string, standar
 }
 
 /** The first `count` of a string array, every one with a value. */
-function strings(values: any[], count: number | null): string[] {
+export function strings(values: any[], count: number | null): string[] {
   const n = count ?? values.length;
   if (n < 0 || n > values.length) throw new Fault(`the array has ${values.length} elements, not ${n}`);
   if (n > MAX_ROWS) throw new Fault(`more than ${MAX_ROWS} items`);
@@ -523,7 +618,9 @@ const LISTS: Kind[] = ["list", "multiList", "listView"];
 const OPTIONS: Kind[] = ["choice", "list", "multiList", "listView"];
 
 function get_string(rt: any, value: any): string {
-  const e = element_of(rt, value, "field", "text", "fileName", "choice", "list", "multiList", "listView");
+  const e = element_of(rt, value, "field", "text", "fileName", "choice", "list", "multiList", "listView", "treeView",
+    "tab");
+  if (e.tree) return e.tree.chosen;
   if (e.kind === "field" || e.kind === "text" || e.kind === "fileName") return e.text;
   if (e.kind === "choice") selection_known(e);
   const at = selected_index(e);
@@ -531,7 +628,8 @@ function get_string(rt: any, value: any): string {
 }
 
 function get_int(rt: any, value: any): number {
-  const e = element_of(rt, value, "checkBox", "choice", "list", "multiList", "listView", "radioBox");
+  const e = element_of(rt, value, "checkBox", "choice", "list", "multiList", "listView", "radioBox", "slider", "tab");
+  if (e.slider) return e.slider.value;
   if (e.kind === "checkBox") return e.rows.reduce((mask, r, i) => (r.selected ? mask | (1 << i) : mask), 0);
   if (e.kind === "choice") selection_known(e);
   return selected_index(e);
@@ -550,7 +648,8 @@ function show_box(rt: any, value: any): never {
   const dialogs = state(rt), box = box_of(rt, value);
   box.realized = box.on_screen = true;
   dialogs.shown = true;
-  if (!dialogs.host.interactive) {
+  if (dialogs.host.interactive) paint(rt, dialogs, [box]);
+  else {
     rt.out.write(render_text(box));
     rt.out.write("(Drawn as text only: nobody can use this box here, so its callbacks never run. "
       + "Run the script in the browser interface to use it.)\n");
@@ -568,6 +667,7 @@ function block_box(rt: any, value: any): never {
       + "Nobody can here, so the script stops at this line. Run it in the browser interface.)\n");
     throw new ShowStop();
   }
+  paint(rt, dialogs, [box]);
   throw new Block(box);
 }
 
@@ -658,8 +758,7 @@ export function register(lib: Library): void {
   });
   lib.operator("->", "DBSide_", "string", "DBPlace_", (rt, at, how: string) => {
     const attachment = how.toLowerCase();
-    if (attachment === "inside") throw new Fault("placing inside a frame or tab is not offered");
-    if (!["flush", "spaced", "aligned", "unattached", "form"].includes(attachment)) {
+    if (!["flush", "spaced", "aligned", "unattached", "form", "inside"].includes(attachment)) {
       throw new Fault(`'${how}' is not an attachment`);
     }
     return { ...rt.need(at, "attachment"), attachment };
@@ -669,6 +768,11 @@ export function register(lib: Library): void {
     const target = element_of(rt, other);
     if (attachment === "form" || attachment === "unattached") throw new Fault(`'${attachment}' takes no other element`);
     if (target.box !== element.box) throw new Fault("the elements are on different dialog boxes");
+    if (attachment === "inside") {
+      put_inside(element, target);
+      return;
+    }
+    follow(element, target);
     const beside = (side === "left" && attachment !== "aligned") || (side === "top" && attachment === "aligned");
     if (!beside || target === element) return;
     const list: Element[] = element.box.elements;
@@ -848,8 +952,13 @@ export function register(lib: Library): void {
     "multiList"), i).cells[0]);
 
   add("set", ["DBE", "string"], "void", (rt, v, value) => {
-    const e = element_of(rt, v, "field", "text", "fileName", "label");
-    if (e.kind === "label") e.label = value;
+    const e = element_of(rt, v, "field", "text", "fileName", "label", "frame", "treeView", "tab");
+    if (e.tree) choose_path(e, value);
+    else if (e.kind === "tab") {
+      const at = e.rows.findIndex((r) => r.cells[0] === value);
+      if (at < 0) throw new Fault(`there is no tab '${value}'`);
+      select_only(e, at);
+    } else if (e.kind === "label" || e.kind === "frame") e.label = value;
     else e.text = value;
   });
   add("set", ["DBE", "Buffer"], "void", (rt, v, buffer) => {
@@ -861,7 +970,15 @@ export function register(lib: Library): void {
     else e.read_only = value;
   });
   add("set", ["DBE", "int"], "void", (rt, v, value) => {
-    const e = element_of(rt, v, "choice", "checkBox", "list", "multiList", "listView", "radioBox");
+    const e = element_of(rt, v, "choice", "checkBox", "list", "multiList", "listView", "radioBox", "slider", "tab");
+    if (e.slider) {
+      if (!(value >= e.slider.min && value <= e.slider.max)) {
+        throw new Fault(`${value} is outside the slider's ${e.slider.min} to ${e.slider.max}`);
+      }
+      e.slider.value = value;
+      return;
+    }
+    if (e.kind === "tab") index_in(e, value);
     if (e.kind === "checkBox") {
       if (value < -1 || value >= 2 ** e.rows.length) throw new Fault(`${value} is not a mask of these boxes`);
       e.rows.forEach((r, i) => { r.selected = value > 0 && Boolean(value & (1 << i)); });
@@ -889,9 +1006,10 @@ export function register(lib: Library): void {
   add("set", ["DBE", "string[]", "int"], "void", replace);
 
   add("selected", ["DBE", "int"], "bool", (rt, v, i) => index_in(element_of(rt, v, ...LISTS), i).selected);
-  add("noElems", ["DBE"], "int", (rt, v) => element_of(rt, v, ...OPTIONS).rows.length);
+  add("noElems", ["DBE"], "int", (rt, v) => element_of(rt, v, ...OPTIONS, "tab").rows.length);
   add("empty", ["DBE"], "void", (rt, v) => {
-    const e = element_of(rt, v, ...OPTIONS);
+    const e = element_of(rt, v, ...OPTIONS, "treeView");
+    if (e.tree) return empty_tree(e);
     e.rows = [];
     e.text = "";
     e.unsettled = false;
@@ -923,7 +1041,11 @@ export function register(lib: Library): void {
   }
 
   add("active", ["DBE"], "void", (rt, v) => { element_of(rt, v).inactive = false; });
-  add("inactive", ["DBE"], "void", (rt, v) => { element_of(rt, v).inactive = true; });
+  add("inactive", ["DBE"], "void", (rt, v) => {
+    const e = element_of(rt, v);
+    if (e.kind === "frame") throw new Fault("whether inactive(frame) greys what is inside is not verified: grey each element");
+    e.inactive = true;
+  });
   add("hide", ["DBE"], "void", (rt, v) => { element_of(rt, v).hidden = true; });
   add("show", ["DBE"], "void", (rt, v) => { element_of(rt, v).hidden = false; });
 
@@ -932,10 +1054,11 @@ export function register(lib: Library): void {
   add("set", ["DBE", "void(DBE)"], "void", (rt, v, callback) => {
     const e = element_of(rt, v);
     if (e.kind === "listView") throw new Fault("set(listView, void(DBE)) is a run-time error in DXL");
-    element_of(rt, v, "toggle", "radioBox", "checkBox", "choice", "list", "multiList", "field").callbacks.select = callback;
+    element_of(rt, v, "toggle", "radioBox", "checkBox", "choice", "list", "multiList", "field", "treeView", "slider",
+      "tab").callbacks.select = callback;
   });
   add("set", ["DBE", "void(DBE)", "void(DBE)"], "void", (rt, v, select, activate) => {
-    Object.assign(element_of(rt, v, "list", "multiList").callbacks, { select, activate });
+    Object.assign(element_of(rt, v, "list", "multiList", "treeView").callbacks, { select, activate });
   });
   add("set", ["DBE", "void(DBE,int)"], "void", (rt, v, check) => {
     checked_view(rt, v).callbacks.check = check;
@@ -1031,4 +1154,6 @@ export function register(lib: Library): void {
   // its Cancel button cannot reach a running script here; the Stop button ends one
   add("progressCancelled", [], "bool", (rt) => { running(rt); return false; });
   add("progressStop", [], "void", (rt) => { state(rt).stop_progress(); });
+
+  register_parts(lib);
 }

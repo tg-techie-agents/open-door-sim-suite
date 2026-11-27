@@ -86,6 +86,7 @@ export const TEMP_FOLDER = "/tmp";
 export class VirtualDisk extends Map<string, string> {
   cwd: string;
   program = "/program"; // the folder holding this program, which scripts never write into
+  folders: Set<string> = new Set(); // made by mkdir, and perhaps still empty
   constructor(cwd: string = "/work") {
     super();
     this.cwd = normpath(cwd);
@@ -117,14 +118,19 @@ export class VirtualDisk extends Map<string, string> {
     const prefix = full + "/";
     if (this.cwd.startsWith(prefix)) return true;
     for (const name of this.keys()) if (name.startsWith(prefix)) return true;
+    for (const name of this.folders) if (name === full || name.startsWith(prefix)) return true;
     return false;
+  }
+
+  make_folder(full: string): void {
+    this.folders.add(full);
   }
 
   /** The names directly inside a folder. */
   children(full: string): string[] {
     const prefix = join_path(full, "");
     const names = new Set<string>();
-    for (const name of this.keys()) {
+    for (const name of [...this.keys(), ...this.folders]) {
       if (name.startsWith(prefix)) names.add(name.slice(prefix.length).split("/")[0]);
     }
     return [...names];
@@ -218,6 +224,22 @@ export class Files {
     }
     throw new Fault(`a script may not write ${py_repr(path)} here: only data files (.csv, .txt, ...) inside `
       + `${this.root}, outside the program's own folders`);
+  }
+
+  /** A new folder, where a script may write. Its parent must be there already. */
+  mkdir(path: string): void {
+    if (!this.writable) throw new Fault("layout DXL cannot write, rename, or delete files");
+    const full = this.realpath(path);
+    const protected_ = PROGRAM_FOLDERS.map((name) => join_path(this.disk.program, name));
+    const allowed = this.anywhere || (this._open_in(full, this.root)
+      && !protected_.some((folder) => _inside(full.toLowerCase(), folder.toLowerCase())));
+    if (!allowed) {
+      throw new Fault(`a script may not make the folder ${py_repr(path)} here: only inside ${this.root}, `
+        + "outside the program's own folders");
+    }
+    if (this.exists(full)) throw new Fault(`mkdir: ${py_repr(path)} already exists; what DOORS does then is not documented`);
+    if (!this.isdir(dirname(full))) throw new Fault(`mkdir: the folder to hold ${py_repr(path)} does not exist`);
+    this.disk.make_folder(full);
   }
 
   // -- the disk ---------------------------------------------------------------

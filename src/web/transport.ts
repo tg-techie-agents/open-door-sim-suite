@@ -7,7 +7,6 @@ import { read_saved, write_saved } from "./storage.ts";
 import type { Snapshot } from "./storage.ts";
 
 // app.js's globals.
-declare const MENUS: Record<string, () => unknown[]>;
 declare const S: any;
 declare const DXL: any;
 declare function h(tag: string, props?: any, ...children: any[]): any;
@@ -18,7 +17,6 @@ declare function confirmDialog(title: string, text: string, okLabel: string, onO
 declare function download(filename: string, data: string, type: string): void;
 declare function chooseFile(accept: string, onFile: (file: File) => unknown): void;
 declare function writtenFile(path: string, text: string): unknown;
-declare function buildMenubar(): void;
 declare function resetView(): void;
 declare function loadTree(): Promise<void>;
 declare function renderTree(): void;
@@ -221,7 +219,9 @@ async function replace_database(snapshot: Snapshot | null): Promise<void> {
     }
   });
   resetView();
-  S.moduleId = S.data = S.selected = S.linkStart = null;
+  S.moduleId = S.data = S.selected = S.linkStart = S.clip = S.redline = null;
+  S.undo = []; // it names objects of the database that is gone
+  S.readOnly = false;
   S.picked = 1;
   S.expanded = new Set([1]);
   await loadTree();
@@ -284,10 +284,9 @@ const script_files = async () => {
 };
 (window as any).opendoorScriptFiles = script_files;
 
+(window as any).opendoorFiles = { save: save_file, open: open_file, reset: reset_example }; // the Database menu
+
 document.addEventListener("DOMContentLoaded", () => {
-  MENUS.Database = () => [["Save database to a file", save_file], ["Open database file...", open_file],
-    ["Files written by scripts...", script_files], null, ["Reset to the example project...", reset_example]];
-  buildMenubar();
   // The phone's way to the database tree.
   element("menubar").prepend(h("button", { type: "button", id: "tree-toggle",
     onclick: () => document.body.classList.toggle("tree-open") }, "Tree"));

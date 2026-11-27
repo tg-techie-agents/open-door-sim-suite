@@ -110,7 +110,7 @@
 {"name":"traceability / small: bare read is not taken for a file","project":"p7","source":"Module m = read \"/P/Reqs\"\ncurrent = m\nObject o\nread \"/P/Tests\"","error":{"line":4,"message":"this could open a module or a text file: assign the result (Module m = read ...) or use read(\"name\", false)"},"output":""},
 {"name":"traceability / small: format","project":"p7","source":"Stream card = write \"note.txt\"\nformat(card, \"it is unbreakable hose\", 6)\nclose card","output":"","unsaved":[],"files":{"note.txt":"it is\nunbrea\nkable\nhose\n"}},
 {"name":"traceability / small: null strings","project":"p7","source":"Module m = read \"/P/Reqs\"\ncurrent = m\nObject o\nstring x = null\nprint null x\nx = \"a\"\nx = null\nprint (x == null)\nint n = null\nn = 3\nprint n","output":"truetrue3","unsaved":[]},
-{"name":"traceability / small: null strings #2","project":"p7","source":"Module m = read \"/P/Reqs\"\ncurrent = m\nObject o\nint n = null\nprint n","error":{"line":5,"message":"variable n has no value yet"},"output":""},
+{"name":"traceability / small: null strings #2","project":"p7","source":"Module m = read \"/P/Reqs\"\ncurrent = m\nObject o\nint n = null\nreal r = null\nbool b = null\nprint n \" \" r \" \" b \" \" (null n) (null r) (null b) \"\"","output":"0 0.000000 false truetruetrue","unsaved":[]},
 {"name":"traceability / small: soundex","project":"p7","source":"print soundex(\"bearing\") \" \" soundex(\"77 baring\") \" \" soundex(\"conveyor\") \"\"","output":"B652 B652 C516","unsaved":[]}
 ]
 }

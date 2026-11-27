@@ -11,7 +11,7 @@
 // The compiler knows the language only. Every DOORS function, type, loop and
 // operator comes from the Library (see registry.ts).
 
-import { unavailable } from "./unavailable.ts";
+import { other_forms, unavailable } from "./unavailable.ts";
 import { StoreError } from "../store.ts";
 import { OSError, join_path, normpath } from "./files.ts";
 import { Overload, key, same_params } from "./registry.ts";
@@ -27,6 +27,8 @@ export type Fn = (env: Env) => any;
 export type Cand = [string, Fn];
 
 export const BASE: readonly string[] = ["string", "int", "real", "char", "bool"];
+/** What `null` assigned to each base type leaves in the variable. */
+const NULL_VALUES: { [type: string]: any } = { string: "", int: 0, real: 0, bool: false, char: "\0" };
 const BASE_DEFAULTS: Map<string, any> = new Map<string, any>(
   [["int", 0], ["real", 0], ["bool", false], ["char", "\0"], ["string", ""]]);
 const CURRENT: Map<string, string> = new Map(
@@ -515,9 +517,10 @@ export class Compiler {
   }
 
   bind(line: number, arg: Arg, param: string): Fn {
-    if (param.startsWith("void(")) {
-      const signature = param.slice(5, -1).split(",");
-      const found = arg.functions?.find((f) => f.return_type === "void" && same_params(f.params, signature));
+    const callback = /^(\w+)\((.*)\)$/.exec(param);
+    if (callback) {
+      const signature = callback[2].split(",");
+      const found = arg.functions?.find((f) => f.return_type === callback[1] && same_params(f.params, signature));
       if (!found) throw new DxlError(line, `this argument must be the name of a function ${param}`);
       return (env) => new Callback(found, env[0]);
     }
@@ -597,7 +600,7 @@ export class Compiler {
         throw new DxlError(line, unavailable(name) ?? `undeclared or unsupported function: ${name}`);
       }
       const got = args.map((a) => (a.functions && !a.cands.length ? "a function" : show(a.cands))).join(", ");
-      throw new DxlError(line, `incorrect arguments for function ${name} (${got})`);
+      throw new DxlError(line, `incorrect arguments for function ${name} (${got})${other_forms(name)}`);
     }
     return out;
   }
@@ -1181,10 +1184,8 @@ export class Compiler {
     const default_ = this.lib.defaults.get(type_name);
     if (init === null) return default_ ? () => default_(rt) : null;
     const cands = this.expr(init);
-    if (BASE.includes(type_name) && cands.length === 1 && cands[0][0] === "null") {
-      // `string s = null` is the empty string; for the other base types the
-      // variable simply has no value until something is assigned to it
-      return type_name === "string" ? () => "" : null;
+    if (Object.hasOwn(NULL_VALUES, type_name) && cands.length === 1 && cands[0][0] === "null") {
+      return () => NULL_VALUES[type_name];
     }
     // e.g. Buffer b = "text": build the default, then assign into it.
     if (!cands.some(([t]) => t === type_name)) {
@@ -1247,8 +1248,9 @@ export class Compiler {
     if (var_.type === "string") this.not_kept(source);
     const put = this.store_to(var_);
     const cands = this.expr(this.meant(source, var_.type));
-    if (op === "=" && var_.type === "string" && cands.length === 1 && cands[0][0] === "null") {
-      return (env) => put(env, "");
+    if (op === "=" && Object.hasOwn(NULL_VALUES, var_.type) && cands.length === 1 && cands[0][0] === "null") {
+      const empty = NULL_VALUES[var_.type];
+      return (env) => put(env, empty);
     }
     for (const [t, fn] of cands) {
       const registered = this.lib.operators.get(key(op, var_.type, t));

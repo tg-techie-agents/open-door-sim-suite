@@ -8,7 +8,8 @@
 // There are no files in the browser: dump_project returns the text and
 // load_project takes it.
 
-import { STANDARD_ATTRIBUTES, Obj, StoreError, _ascii_digits, _cmp, _repr, _type_name } from "../store.ts";
+import { RIGHTS, STANDARD_ATTRIBUTES, Obj, StoreError, _ascii_digits, _cmp, _repr, _type_name,
+         rights_names } from "../store.ts";
 import type { Store, Link, AttrDef } from "../store.ts";
 
 export const FORMAT = "opendoor-project", VERSION = 1;
@@ -289,12 +290,86 @@ function _split(path: any): [string, string] {
 // Writing
 // =========================================================================
 
+// project-file key, AttrType field
+const TYPE_KEYS = [["description", "description"], ["numbers", "numbers"], ["colours", "colours"],
+  ["real_colours", "real_colours"], ["descriptions", "descriptions"], ["min", "min"], ["max", "max"]] as const;
+// project-file key, AttrDef field, the value that is not written
+const DEF_FLAGS = [["inherit", "inherit", false], ["hidden", "hidden", false], ["history", "history", true],
+  ["change_bars", "bars", true], ["change_dates", "dates", true]] as const;
+
+function _written_type(type: any): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [key, field] of TYPE_KEYS) {
+    const value = type[field];
+    if (Array.isArray(value) ? value.length : value) out[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return out;
+}
+
+// the extras a project file's type entry holds, checked
+function _read_type(entry: any, where: string): Record<string, any> {
+  const out: Record<string, any> = {};
+  for (const [key, field] of TYPE_KEYS) {
+    if (!Object.hasOwn(entry, key)) continue;
+    const value = entry[key];
+    if (key === "numbers" || key === "colours") {
+      const numbers = _iter(value).map((v) => Number(v instanceof _Num ? v.value : v));
+      if (!numbers.every(Number.isInteger)) throw new StoreError(`${where}: a type's ${key} are whole numbers`);
+      out[field] = numbers;
+    } else if (key === "descriptions") out[field] = _iter(value).map(_column);
+    else if (key === "real_colours") out[field] = _truthy(value);
+    else out[field] = _column(value);
+  }
+  return out;
+}
+
+// The things with access rights of their own (baselines left out).
+function _written_access(store: Store): any[] {
+  const out: any[] = [];
+  const add = (thing: number | Obj, entry: Record<string, any>) => {
+    if (store.is_access_inherited(thing)) return;
+    entry.entries = store.access_list(thing).map((e) => ({ name: e.name, rights: rights_names(e.rights) }));
+    out.push(entry);
+  };
+  for (const item of store.walk()) {
+    add(item.id, { path: store.path(item.id) });
+    if (item.kind !== "formal") continue;
+    for (const obj of store.objects(item.id, true)) add(obj, { path: store.path(item.id), object: obj.absno });
+  }
+  return out;
+}
+
+// Applied last, so that no restriction stands in the way of loading the rest,
+// and deepest first, so that none stands in the way of the others.
+function _load_access(store: Store, data: any): void {
+  const entries = _iter(_get(data, "access", [])).map((entry) => {
+    _only(entry, ["path", "object", "entries"], "an access entry");
+    const path = _column(_key(entry, "path")), number = _get(entry, "object");
+    const item = store.find(path);
+    const thing = item === null || number === null ? item : store.object(item, Number(_column(number)));
+    if (thing === null) throw new StoreError(`access: nothing at ${path}`);
+    const list = _iter(_key(entry, "entries")).map((e) => {
+      _only(e, ["name", "rights"], "an access entry");
+      let rights = 0;
+      for (const name of _iter(_key(e, "rights"))) {
+        if (!Object.hasOwn(RIGHTS, name)) throw new StoreError(`access: no right called ${_repr(name)}`);
+        rights |= (RIGHTS as Record<string, number>)[name];
+      }
+      return { name: _get(e, "name") === null ? null : _column(_get(e, "name")), rights };
+    });
+    const depth = path.split("/").length + (thing instanceof Obj ? 1000 + store.level(thing) : 0);
+    return { thing, list, depth };
+  });
+  for (const { thing, list } of entries.sort((a, b) => b.depth - a.depth)) store.restore_access(thing, list);
+}
+
 // Everything a baseline freezes, apart from links.
 function _state(store: Store, module_id: number): Record<string, any> {
   const item = store.item(module_id);
   const types = store.types(module_id)
     .filter((t) => !BUILT_IN_TYPES.has(JSON.stringify([t.name, t.base, t.values])))
-    .map((t) => ({ name: t.name, base: t.base, ...(t.values.length ? { values: [...t.values] } : {}) }));
+    .map((t) => ({ name: t.name, base: t.base, ...(t.values.length ? { values: [...t.values] } : {}),
+                   ..._written_type(t) }));
   const definitions = store.attributes(module_id, null);
   const attributes: Record<string, any>[] = [];
   for (const a of definitions) {
@@ -304,6 +379,10 @@ function _state(store: Store, module_id: number): Record<string, any> {
     if (a.multi) entry.multi = true;
     if (a.default) entry.default = a.multi ? a.default.split("\n") : a.default;
     if (a.dxl) entry.dxl = a.dxl;
+    if (a.description) entry.description = a.description;
+    for (const [key, field, usual] of DEF_FLAGS) {
+      if (a[field] !== usual) entry[key] = a[field];
+    }
     attributes.push(entry);
   }
   const by_name = new Map<string, AttrDef>(definitions.map((a) => [a.name, a]));
@@ -315,7 +394,7 @@ function _state(store: Store, module_id: number): Record<string, any> {
     .filter((a) => a.scope === "module" && store.module_value(module_id, a.name) !== a.default)
     .map((a) => [a.name, written(a.name, store.module_value(module_id, a.name))]));
 
-  const held = store.values(module_id);
+  const held = store.values(module_id, true);
   const entries = new Map<number, Record<string, any>>(), tree: Record<string, any>[] = [];
   for (const obj of store.objects(module_id, true)) {
     const mine = held.get(obj.absno) ?? new Map<string, string>();
@@ -327,7 +406,8 @@ function _state(store: Store, module_id: number): Record<string, any> {
     for (const a of definitions) {
       if (a.scope !== "object" || STANDARD.has(a.name)) continue;
       const value = mine.get(a.name) ?? "";
-      if (value || a.default) values.push([a.name, written(a.name, value)]); // an emptied default must be written, or it comes back
+      // an emptied default must be written, or it comes back; so must an emptied inherited value
+      if (a.inherit ? mine.has(a.name) : value || a.default) values.push([a.name, written(a.name, value)]);
     }
     if (values.length) entry.values = Object.fromEntries(values);
     if (store.is_deleted(obj)) entry.deleted = true;
@@ -393,8 +473,16 @@ export function dump_project(store: Store): string {
     if (item.description && item.kind !== "formal") entry.description = item.description;
     if (item.kind === "folder" || item.kind === "project") {
       if (item.kind === "project") entry.project = true;
+      // one naming a module that has gone could not be loaded again
+      const descriptors = store.link_descriptors(item.id);
+      if (descriptors.length) entry.link_descriptors = descriptors;
+      const exclusive = store.children(item.id).filter((c) => store.links_exclusive(item.id, c.id));
+      if (exclusive.length) entry.links_exclusive = exclusive.map((c) => c.name);
       folders.push(entry);
     } else if (item.kind === "link") {
+      const linksets = store.linksets(item.id).map(([a, b]) => [a, b].map((m) => store.path(m)))
+        .filter(([a, b]) => store.module_at(a) !== null && store.module_at(b) !== null);
+      if (linksets.length) entry.linksets = linksets.sort((x, y) => _cmp(x.join("\n"), y.join("\n")));
       link_modules.push(entry);
     } else formal.set(item.id, where);
   }
@@ -469,7 +557,9 @@ export function dump_project(store: Store): string {
     }
   }
 
-  const data = { format: FORMAT, version: VERSION, folders, modules, link_modules, links };
+  const data: Record<string, any> = { format: FORMAT, version: VERSION, folders, modules, link_modules, links };
+  const access = _written_access(store);
+  if (access.length) data.access = access;
   return JSON.stringify(data, null, 2) + "\n";
 }
 
@@ -501,7 +591,8 @@ export function load_project_data(store: Store, data: any, path: string = "proje
   if (!_is_dict(data) || _get(data, "format") !== FORMAT || !(_numeric(version) && Number(version) === VERSION)) {
     throw new StoreError(`${path} is not a project file ("format": "${FORMAT}", "version": ${VERSION})`);
   }
-  _only(data, ["format", "version", "folders", "modules", "link_modules", "links", "steps", "created_on"], path);
+  _only(data, ["format", "version", "folders", "modules", "link_modules", "links", "steps", "created_on", "access"],
+    path);
   try {
     store.transaction(() => _load(store, data));
   } catch (error) {
@@ -524,6 +615,7 @@ function _load(store: Store, data: any): void {
       throw new StoreError(`step ${index + 1}: ${error.message}`);
     }
   });
+  _load_access(store, data);
 }
 
 type _Wanted = Map<string, [any, any, Obj, Set<string>]>;
@@ -534,11 +626,11 @@ function _link_key(link_module: unknown, number: unknown, target: Obj): string {
 
 function _load_content(store: Store, data: any): Map<string, number> {
   for (const entry of _iter(_get(data, "folders", []))) {
-    _only(entry, ["path", "description", "project"], "folder");
+    _only(entry, ["path", "description", "project", "link_descriptors", "links_exclusive"], "folder");
     ensure_folder(store, _key(entry, "path"), _get(entry, "description", ""), _get(entry, "project", false));
   }
   for (const entry of _iter(_get(data, "link_modules", []))) {
-    _only(entry, ["path", "description"], "link module");
+    _only(entry, ["path", "description", "linksets"], "link module");
     const [parent, name] = _split(_key(entry, "path"));
     ensure_folder(store, parent);
     if (store.module_at(_key(entry, "path"), "link") === null) {
@@ -625,6 +717,37 @@ function _load_content(store: Store, data: any): Map<string, number> {
     _set_links(store, module, [...links.values()].map(([m, n, t]) => [m, n, t] as [any, any, Obj]));
   }
   _set_suspect(store, wanted);
+  for (const entry of _iter(_get(data, "link_modules", []))) {
+    const link_module = store.module_at(_key(entry, "path"), "link")!;
+    for (const pair of _iter(_get(entry, "linksets", []))) {
+      const [a, b] = _iter(pair).map((path) => store.module_at(_column(path)));
+      if (a === null || b === null || a === undefined || b === undefined) {
+        throw new StoreError("a linkset names two formal modules by their full paths");
+      }
+      if (!store.linksets(link_module).some(([x, y]) => x === a && y === b)) store.create_linkset(link_module, a, b);
+    }
+  }
+  // after the links, so that a limit does not stand in the way of loading them
+  for (const entry of _iter(_get(data, "folders", []))) {
+    const folder = store.find(_key(entry, "path"))!;
+    for (const d of _iter(_get(entry, "link_descriptors", []))) {
+      _only(d, ["source", "target", "linkmod", "overridable", "mandatory"], "link descriptor");
+      const descriptor = { source: _column(_key(d, "source")), target: _column(_key(d, "target")),
+        linkmod: _column(_key(d, "linkmod")), overridable: _truthy(_get(d, "overridable")),
+        mandatory: _truthy(_get(d, "mandatory")) };
+      const held = store.link_descriptors(folder)
+        .find((h) => h.source === descriptor.source && h.target === descriptor.target);
+      if (!held) store.add_link_descriptor(folder, descriptor);
+      else if (held.linkmod !== descriptor.linkmod) {
+        throw new StoreError("a link descriptor is already defined differently here");
+      }
+    }
+    for (const name of _iter(_get(entry, "links_exclusive", []))) {
+      const module = store.find(_column(name), folder);
+      if (module === null) throw new StoreError(`links_exclusive: no module ${_repr(name)}`);
+      store.set_links_exclusive(folder, module, true);
+    }
+  }
 
   for (const [where, spec] of specs) {
     for (const [name, definition] of _items(_get(spec, "views", {}))) {
@@ -740,7 +863,7 @@ function _apply(store: Store, module: number, state: any, where: string): void {
 
   const shorthand = Object.values(SHORTHAND);
   const definitions = store.attributes(module).filter((a) => !shorthand.includes(a.name));
-  const blank = [...definitions.filter((a) => !a.default && !a.dxl).map((a) => a.name), ...shorthand];
+  const blank = [...definitions.filter((a) => !a.default && !a.dxl && !a.inherit).map((a) => a.name), ...shorthand];
   for (let [number, , values] of flat) {
     const obj = new Obj(module, number);
     if (existing.has(number)) { // an attribute the state leaves out was emptied
@@ -754,43 +877,73 @@ function _apply(store: Store, module: number, state: any, where: string): void {
 }
 
 function _apply_definitions(store: Store, module: number, state: any, where: string): void {
+  const given_types = new Map<string, any>(_iter(_get(state, "types", [])).map((e) => [_key(e, "name"), e]));
+  const shape = (base: unknown, values: unknown, extras: unknown) => JSON.stringify([base, values, extras]);
+  // A type of the module's own that this state changes or drops goes, with the
+  // attributes using it, which are made again below from the state.
+  for (const t of store.types(module)) {
+    if (BUILT_IN_TYPES.has(JSON.stringify([t.name, t.base, t.values])) && !given_types.has(t.name)) continue;
+    const entry = given_types.get(t.name);
+    if (entry !== undefined && shape(t.base, [...t.values], _read_type(_written_type(t), where))
+        === shape(_get(entry, "base"), _iter(_get(entry, "values", [])).map((v) => (v instanceof _Num ? v.value : v)),
+                  _read_type(entry, where))) continue;
+    for (const name of store.type_users(module, t.name)) store.delete_attribute(module, name);
+    store.delete_type(module, t.name);
+  }
   const types = new Map(store.types(module).map((t) => [t.name, t]));
   for (const entry of _iter(_get(state, "types", []))) {
-    _only(entry, ["name", "base", "values"], `a type in ${where}`);
+    _only(entry, ["name", "base", "values", ...TYPE_KEYS.map(([key]) => key)], `a type in ${where}`);
     const values = _iter(_get(entry, "values", [])).map((v) => (v instanceof _Num ? v.value : v));
+    const extras = _read_type(entry, where);
     const known = types.get(_key(entry, "name"));
     if (known === undefined) {
-      store.create_type(module, _key(entry, "name"), _key(entry, "base"), values);
+      store.create_type(module, _key(entry, "name"), _key(entry, "base"), values, extras);
     } else if (known.base !== _key(entry, "base") || known.values.length !== values.length
-               || known.values.some((v, i) => v !== values[i])) {
+               || known.values.some((v, i) => v !== values[i])
+               || JSON.stringify(_read_type(_written_type(known), where)) !== JSON.stringify(extras)) {
       throw new StoreError(`${where}: type ${_repr(_key(entry, "name"))} is defined differently elsewhere`);
     }
   }
 
-  type Shape = [any, any, boolean, string, string];
+  type Shape = [any, any, boolean, string, string, string];
   const wanted = new Map<string, Shape>();
   for (const entry of _iter(_get(state, "attributes", []))) {
-    _only(entry, ["name", "type", "scope", "multi", "default", "dxl"], `an attribute in ${where}`);
+    _only(entry, ["name", "type", "scope", "multi", "default", "dxl", "description",
+                  ...DEF_FLAGS.map(([key]) => key)], `an attribute in ${where}`);
     const dxl = _get(entry, "dxl", "");
     if (typeof dxl !== "string") throw new StoreError(`${where}: an attribute's "dxl" is its code, as text`);
     if (!STANDARD.has(_key(entry, "name"))) {
+      const extras: Record<string, any> = {};
+      if (_get(entry, "description")) extras.description = _column(_get(entry, "description"));
+      for (const [key, field, usual] of DEF_FLAGS) {
+        const flag = _truthy(_get(entry, key, usual));
+        if (flag !== usual) extras[field] = flag;
+      }
       wanted.set(_key(entry, "name"), [_get(entry, "type", "String"), _get(entry, "scope", "object"),
-                                       _truthy(_get(entry, "multi")), _text(_get(entry, "default", "")), dxl]);
+                                       _truthy(_get(entry, "multi")), _text(_get(entry, "default", "")), dxl,
+                                       JSON.stringify(extras)]);
     }
   }
   const current = new Map<string, Shape>(store.attributes(module, null)
-    .filter((a) => !STANDARD.has(a.name)).map((a) => [a.name, [a.type_name, a.scope, a.multi, a.default, a.dxl]]));
+    .filter((a) => !STANDARD.has(a.name)).map((a) => {
+      const extras: Record<string, any> = {};
+      if (a.description) extras.description = a.description;
+      for (const [, field, usual] of DEF_FLAGS) {
+        if (a[field] !== usual) extras[field] = a[field];
+      }
+      return [a.name, [a.type_name, a.scope, a.multi, a.default, a.dxl, JSON.stringify(extras)]];
+    }));
   const same = (a: Shape | undefined, b: Shape | undefined) => !!a && !!b && a.every((v, i) => v === b[i]);
   for (const [name, shape] of current) {
     if (!same(wanted.get(name), shape)) store.delete_attribute(module, name);
   }
   for (const [name, shape] of wanted) {
     if (!same(current.get(name), shape)) {
-      const [type_name, scope, multi, default_, dxl] = shape;
+      const [type_name, scope, multi, default_, dxl, extras] = shape;
       if (scope !== "object" && scope !== "module") {
         throw new StoreError(`${where}: attribute scope is "object" or "module"`);
       }
-      store.create_attribute(module, name, type_name, scope, multi, default_, dxl);
+      store.create_attribute(module, name, type_name, scope, multi, default_, dxl, JSON.parse(extras));
     }
   }
 

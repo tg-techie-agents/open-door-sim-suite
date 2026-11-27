@@ -86,7 +86,7 @@ Object.assign(TRACE, {
   },
   async load() {
     T.suspects = new Map();
-    if (!T.suspectColumn || T.suspectColumn.kind === "indicators" || !writable()) return;
+    if (!T.suspectColumn || T.suspectColumn.kind === "indicators" || !current()) return;
     const reply = await api("trace_suspects", { module: S.moduleId });
     T.suspects = new Map(reply.objects.map((o) => [o.absno, o]));
   },
@@ -129,7 +129,7 @@ const SYSTEM_CHOICES = ["Object Heading", "Object Text", "Object Short Text", "A
 
 async function traceWizard() {
   const m = needModule();
-  if (!writable()) throw new Error("Traceability columns work on the current version, not a baseline.");
+  if (!writable()) throw new Error(can.write() + ".");
   const info = await api("trace_info");
   const here = info.formalModules.find((x) => x.id === m.id);
   const w = {
@@ -420,7 +420,7 @@ async function linkFilterDialog() {
 // ---------------------------------------------------------------- suspect links
 
 function suspectCell(row, c) {
-  if (!writable()) return "(not shown on a baseline)";
+  if (!current()) return "(not shown on a baseline)";
   if (c.kind === "indicators") {
     const marks = [];
     if (c.in && row.in.some((l) => isSuspect(l, "in"))) marks.push(h("span", { class: "arrow in", title: "Suspect in-link" }, "◀? "));
@@ -471,7 +471,7 @@ function suspectFilterDialog() {
 
 function suspectColumnDialog(kind, title) {
   needModule();
-  if (!writable()) throw new Error("Suspect links are shown on the current version, not a baseline.");
+  if (!current()) throw new Error("Suspect links are shown on the current version, not a baseline.");
   suspectChooser(title, T.suspectColumn?.kind === kind ? T.suspectColumn : null, "Show column",
     async (which) => {
       T.suspectColumn = { kind, ...which };
@@ -618,7 +618,7 @@ async function clearSuspectDialog() {
 
 async function clearAllDialog() {
   const m = needModule();
-  if (!writable()) throw new Error("A baseline is read only.");
+  if (!writable()) throw new Error(can.write() + ".");
   const data = await api("trace_suspects", { module: m.id });
   const all = (direction) => data.objects.flatMap((o) => o[direction]);
   const incoming = all("in"), outgoing = all("out");
@@ -812,10 +812,10 @@ function viewRows() {
   if (S.outLinks) add("Out-links", (row) => ends(row.out));
   if (S.inLinks) add("In-links", (row) => ends(row.in));
   if (S.dxlColumn) add(S.dxlColumn.title, (row) => S.dxlColumn.cells[row.absno] || "");
-  for (const extra of TRACE.columns()) {
+  for (const extra of extraColumns()) {
     add(extra.title, (row) => {
       const content = extra.cell(row);
-      return typeof content === "string" ? content : content.map((node) => node.textContent).join(T.suspectColumn.kind === "indicators" ? "" : "\n");
+      return typeof content === "string" ? content : content.map((node) => node.textContent).join(T.suspectColumn?.kind === "indicators" && extra.title === "Suspect" ? "" : "\n");
     });
   }
   return [columns.map((c) => c.title), ...visibleRows().map((row) => columns.map((c) => c.text(row)))];
@@ -825,37 +825,3 @@ function exportView() {
   const rows = viewRows();
   downloadCsv(S.data.module.name + (S.view ? " - " + S.view : ""), rows);
 }
-
-// ---------------------------------------------------------------- menus
-
-const fileMenu = MENUS.File;
-MENUS.File = () => {
-  const entries = fileMenu();
-  const at = entries.findIndex((e) => e && e[0] === "Export CSV...");
-  entries.splice(at + 1, 0, ["Export view to CSV", exportView, "", can.module()]);
-  return entries;
-};
-
-MENUS.Analysis = () => {
-  const columns = S.data && (S.layout || []).some((c) => c.kind === "dxl");
-  const suspectShown = can.baseline();
-  return [
-    ["Traceability wizard...", traceWizard, "", can.baseline()],
-    ["Traceability columns...", traceColumnsDialog, "", can.module() || (columns ? "" : "this view has none")],
-    ["Traceability Explorer", () => {}, "", "not built here"],
-    null,
-    ["Link overview and matrix...", overviewDialog, "", ""],
-    ["Filter on links and columns...", linkFilterDialog, "", can.module()],
-    null,
-    ["Suspect links: filter...", suspectFilterDialog, "", can.module()],
-    ["Suspect links: indicators...", () => suspectColumnDialog("indicators", "Display suspect indicators"), "", suspectShown],
-    ["Suspect links: last change...", () => suspectColumnDialog("last", "Display last change"), "", suspectShown],
-    ["Suspect links: all changes...", () => suspectColumnDialog("all", "Display all changes"), "", suspectShown],
-    ["Suspect links: clear...", clearSuspectDialog, "", can.write() || can.object()],
-    ["Suspect links: clear all...", clearAllDialog, "", can.write()],
-    null,
-    ["Export view to CSV", exportView, "", can.module()],
-    ["Compare with baseline...", () => compareDialog(), "", can.compare()],
-    ["Baselines...", baselinesDialog, "", can.module()],
-  ];
-};

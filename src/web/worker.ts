@@ -13,7 +13,10 @@ import type { Snapshot } from "./storage.ts";
 const CHANGES = new Set(["create_item", "update_item", "delete_item", "add_object", "set_values", "move_object",
   "delete_object", "undelete_object", "create_link", "delete_link", "clear_suspect", "create_attribute",
   "delete_attribute", "set_module_value", "save_view", "delete_view", "create_baseline", "run_dxl",
-  "import_csv", "import_reqif", "trace_clear_suspect", "dxl_event"]);
+  "import_csv", "import_reqif", "trace_clear_suspect", "dxl_event", "paste_object", "split_heading", "split_object",
+  "purge", "replace_text", "restore_values", "create_type", "link_by_attribute", "modify_type", "delete_type",
+  "modify_attribute", "purge_object", "purge_item", "set_project", "add_link_rule", "remove_link_rule",
+  "set_links_exclusive", "create_linkset", "delete_linkset", "set_default_link", "change_access"]);
 
 const scope = self as any;
 let api: Api;

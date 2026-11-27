@@ -119,20 +119,90 @@ export class Item extends _Record {
   }
 }
 
+// What an attribute type may carry beyond its base type and value names.
+// `numbers`, `colours` and `descriptions` run parallel to the values.
+export type TypeExtras = {
+  description?: string;
+  numbers?: readonly number[];
+  colours?: readonly number[];
+  real_colours?: boolean; // the colours are real colour numbers, not logical ones
+  descriptions?: readonly string[];
+  min?: string; // limits of an Integer, Real or Date type
+  max?: string;
+};
+
+// Which link module links from `source` to `target` go in. The three names are
+// as given, read from the folder that holds the descriptor.
+export type LinkDescriptor = {
+  source: string;
+  target: string;
+  linkmod: string;
+  overridable: boolean;
+  mandatory: boolean;
+};
+
+// Access rights, as bits. A list is a thing's own (specific) access rights; a
+// thing without one has its parent's. The entry named null is for everyone else.
+export const RIGHTS = { read: 1, modify: 2, create: 4, delete: 8, control: 16 } as const;
+export const ALL_RIGHTS = 31;
+const _DATA_RIGHTS = RIGHTS.read | RIGHTS.modify | RIGHTS.create | RIGHTS.delete;
+export type AccessEntry = { name: string | null; rights: number };
+// a folder, project or module by id, or an object
+export type Guarded = number | Obj;
+
+// the rights each right brings with it, as DOORS confers them
+export function closed_rights(rights: number): number {
+  let out = rights;
+  if (out & RIGHTS.control) out |= RIGHTS.modify | RIGHTS.create | RIGHTS.read;
+  if (out & RIGHTS.delete) out |= RIGHTS.modify | RIGHTS.read;
+  if (out & (RIGHTS.modify | RIGHTS.create)) out |= RIGHTS.read;
+  return out;
+}
+
+export function rights_names(rights: number): string[] {
+  return Object.entries(RIGHTS).filter(([, bit]) => rights & bit).map(([name]) => name);
+}
+
 export class AttrType extends _Record {
   readonly module_id: number;
   readonly name: string;
   readonly base: string;
   readonly values: readonly string[]; // enumeration values, in order
+  readonly description: string;
+  readonly numbers: readonly number[];
+  readonly colours: readonly number[];
+  readonly real_colours: boolean;
+  readonly descriptions: readonly string[];
+  readonly min: string;
+  readonly max: string;
 
-  constructor(module_id: number, name: string, base: string, values: readonly string[]) {
+  constructor(module_id: number, name: string, base: string, values: readonly string[], extras: TypeExtras = {}) {
     super();
     this.module_id = module_id;
     this.name = name;
     this.base = base;
     this.values = values;
+    this.description = extras.description ?? "";
+    this.numbers = [...extras.numbers ?? []];
+    this.colours = [...extras.colours ?? []];
+    this.real_colours = extras.real_colours ?? false;
+    this.descriptions = [...extras.descriptions ?? []];
+    this.min = extras.min ?? "";
+    this.max = extras.max ?? "";
   }
 }
+
+// Settings of an attribute definition beyond its type, default and DXL.
+export type DefExtras = {
+  description?: string;
+  inherit?: boolean; // objects without a value of their own show their parent's
+  hidden?: boolean;
+  history?: boolean; // false: edits are not recorded in the history
+  bars?: boolean; // false: edits do not alter change bars (none are shown here)
+  dates?: boolean; // false: edits do not alter Last Modified By / On
+  min?: string; // from the type
+  max?: string;
+};
 
 export class AttrDef extends _Record {
   readonly module_id: number;
@@ -145,9 +215,27 @@ export class AttrDef extends _Record {
   readonly values: readonly string[];
   readonly dxl: string; // attribute DXL that calculates the value, or ""
 
+  readonly description: string;
+  readonly inherit: boolean;
+  readonly hidden: boolean;
+  readonly history: boolean;
+  readonly bars: boolean;
+  readonly dates: boolean;
+  readonly min: string;
+  readonly max: string;
+
   constructor(module_id: number, name: string, type_name: string, base: string, scope: string,
-              multi: boolean, default_: string, values: readonly string[], dxl: string = "") {
+              multi: boolean, default_: string, values: readonly string[], dxl: string = "",
+              extras: DefExtras = {}) {
     super();
+    this.description = extras.description ?? "";
+    this.inherit = extras.inherit ?? false;
+    this.hidden = extras.hidden ?? false;
+    this.history = extras.history ?? true;
+    this.bars = extras.bars ?? true;
+    this.dates = extras.dates ?? true;
+    this.min = extras.min ?? "";
+    this.max = extras.max ?? "";
     this.module_id = module_id;
     this.name = name;
     this.type_name = type_name;
@@ -385,12 +473,20 @@ type _ItemRow = {
   prefix: string; next_absno: number; baseline_of: number | null; major: number | null;
   minor: number | null; suffix: string | null; annotation: string | null;
   created_by: string; created_on: string; modified_by?: string; modified_on?: string;
+  // folders and projects: link module descriptors, and the modules limited to them
+  descriptors?: LinkDescriptor[];
+  exclusive?: number[];
+  // link modules: linksets made before any link was, as [source, target] module ids
+  linksets?: [number, number][];
+  access?: AccessEntry[]; // own access rights; absent: inherited
 };
-type _TypeRow = { base: string; vals: string[] };
-type _DefRow = { type_name: string; scope: string; multi: number; dflt: string; position: number; dxl?: string };
+type _TypeRow = { base: string; vals: string[] } & TypeExtras;
+type _DefRow = { type_name: string; scope: string; multi: number; dflt: string; position: number; dxl?: string }
+  & Omit<DefExtras, "min" | "max">;
 type _ObjectRow = {
   absno: number; parent: number | null; position: number; deleted: number; created_by: string;
   created_on: string; modified_by: string; modified_on: string; changed_seq: number;
+  access?: AccessEntry[];
 };
 type _LinkRow = {
   id: number; link_module: number; source_module: number; source_absno: number;
@@ -432,6 +528,96 @@ function _nocase(text: string): string {
   return text.replace(/[A-Z]+/g, (s) => s.toLowerCase());
 }
 
+// types DOORS itself defines
+const SYSTEM_TYPE_NAMES = ["String", "Text", "Integer", "Real", "Date", "Boolean", "Username"];
+
+const _TYPE_EXTRAS = ["description", "numbers", "colours", "real_colours", "descriptions", "min", "max"] as const;
+
+// the keys of a type's extras that were actually given
+function _type_extras(extras: TypeExtras): TypeExtras {
+  const out: any = {};
+  for (const key of _TYPE_EXTRAS) {
+    const value: any = extras[key];
+    if (value === undefined) continue;
+    const empty = value === "" || value === false || (Array.isArray(value) && !value.length);
+    out[key] = empty ? undefined : Array.isArray(value) ? [...value] : value;
+  }
+  return JSON.parse(JSON.stringify(out));
+}
+
+function _check_type(base: string, values: readonly string[], extras: TypeExtras): void {
+  if (!BASE_TYPES.includes(base)) throw new StoreError(`unknown base type ${_repr(base)}`);
+  if ((base === "Enumeration") !== (values.length > 0)) {
+    throw new StoreError("an enumeration type needs values, and no other type takes them");
+  }
+  if (new Set(values).size !== values.length) throw new StoreError("enumeration values must be unique");
+  for (const key of ["numbers", "colours", "descriptions"] as const) {
+    const given = extras[key];
+    if (given?.length && given.length !== values.length) {
+      throw new StoreError(`an enumeration type needs one of its ${key} for each value`);
+    }
+  }
+  const ends = [extras.min, extras.max].filter((v) => v !== undefined && v !== "") as string[];
+  if (ends.length && !["Integer", "Real", "Date"].includes(base)) {
+    throw new StoreError("only Integer, Real and Date types have limits");
+  }
+  if (extras.min && extras.max && _compare_as(base, extras.max, extras.min) < 0) {
+    throw new StoreError("the maximum is less than the minimum");
+  }
+}
+
+function _compare_as(base: string, a: string, b: string): number {
+  if (base === "Date") return parse_date(a)!.getTime() - parse_date(b)!.getTime();
+  return Number(a) - Number(b);
+}
+
+function _check_range(definition: AttrDef, value: string): void {
+  const low = definition.min && _compare_as(definition.base, value, definition.min) < 0;
+  const high = definition.max && _compare_as(definition.base, value, definition.max) > 0;
+  if (low || high) {
+    throw new StoreError(`${definition.name}: ${_repr(value)} is outside the range of type `
+      + `${_repr(definition.type_name)}`);
+  }
+}
+
+// the definition settings that were given; only what differs from the usual is kept
+function _def_extras(extras: DefExtras): Partial<_DefRow> {
+  const out: any = {};
+  const usual = { description: "", inherit: false, hidden: false, history: true, bars: true, dates: true };
+  for (const [key, plain] of Object.entries(usual)) {
+    const value = (extras as any)[key];
+    if (value !== undefined) out[key] = value === plain ? undefined : value;
+  }
+  return out;
+}
+
+function _check_inherit(name: string, scope: string, inherit: boolean, dxl: string): void {
+  if (inherit && scope === "object" && dxl) {
+    throw new StoreError(`${name}: an inherited object attribute with DXL is not supported here`);
+  }
+}
+
+// rename an attribute wherever a saved view names it
+function _rename_in_view(node: any, from: string, to: string): boolean {
+  let changed = false;
+  if (!node || typeof node !== "object") return false;
+  for (const key of Object.keys(node)) {
+    const value = node[key];
+    if ((key === "attribute" || key === "sort") && value === from) {
+      node[key] = to;
+      changed = true;
+    } else if (key === "columns" && Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        if (value[i] === from) {
+          value[i] = to;
+          changed = true;
+        } else if (_rename_in_view(value[i], from, to)) changed = true;
+      }
+    } else if (_rename_in_view(value, from, to)) changed = true;
+  }
+  return changed;
+}
+
 // An in-memory database. The `path` is only remembered; use `dumps` and `loads`
 // to keep it.
 //
@@ -446,6 +632,8 @@ export class Store {
   _timeouts: Map<string, number>; // by "module:name": objects whose DXL ran too long
   db_path: string;
   user: string;
+  default_link_name: string | null; // the user's default link module, if set
+  _guarded: boolean; // some thing has had access rights of its own
   total_changes: number;
   _depth: number;
   _clock: string | null;
@@ -466,6 +654,8 @@ export class Store {
   constructor(path: string = ":memory:", user: string | null = null) {
     this.db_path = String(path);
     this.user = user || _user();
+    this.default_link_name = null;
+    this._guarded = false;
     this.total_changes = 0;
     this._depth = 0;
     this._clock = null;
@@ -728,6 +918,7 @@ export class Store {
     if (!["folder", "project"].includes(this.item(parent).kind)) {
       throw new StoreError(`${parent_path} is not a folder or project`);
     }
+    this._require(parent, RIGHTS.create, "create something in a folder");
     if (!name || name.includes("/") || name === "." || name === "..") {
       throw new StoreError(`not a usable name: ${_repr(name)}`);
     }
@@ -770,6 +961,7 @@ export class Store {
     this.transaction(() => {
       const item = this.item(item_id);
       this._writable(item_id);
+      this._require(item_id, RIGHTS.modify, "change a name, description or prefix");
       if (name !== null && name !== item.name) {
         if (!name || name.includes("/")) throw new StoreError(`not a usable name: ${_repr(name)}`);
         if (item.parent !== null && this._names.get(item.parent)?.has(name)) {
@@ -786,7 +978,60 @@ export class Store {
   // Soft delete (or undelete) a folder, project or module with its contents.
   delete_item(item_id: number, deleted: boolean = true): void {
     if (item_id === ROOT) throw new StoreError("the database root cannot be deleted");
-    this.transaction(() => this._update_item(item_id, "deleted", Number(deleted)));
+    this.transaction(() => {
+      this._require_within(item_id, RIGHTS.delete, deleted ? "delete" : "undelete");
+      this._update_item(item_id, "deleted", Number(deleted));
+    });
+  }
+
+  // Remove a soft-deleted folder, project or module for good, with everything
+  // in it, its baselines and the links to and from its objects.
+  purge_item(item_id: number): void {
+    this.transaction(() => {
+      if (item_id === ROOT) throw new StoreError("the database root cannot be purged");
+      this._writable(item_id);
+      if (!this.item(item_id).deleted) throw new StoreError(`${this.path(item_id)} is not deleted`);
+      this._require_within(item_id, RIGHTS.delete, "purge");
+      const gone: number[] = [];
+      const collect = (id: number) => {
+        for (const child of this._item_children.get(id) ?? []) collect(child);
+        gone.push(...this._baselines.get(id) ?? [], id);
+      };
+      collect(item_id);
+      const doomed = new Set(gone);
+      for (const link of [...this._links.values()]) {
+        if (doomed.has(link.source_module) || doomed.has(link.target_module) || doomed.has(link.link_module)) {
+          this._delete_link_row(link.id);
+        }
+      }
+      for (const id of gone) {
+        const row = this._items.get(id)!;
+        this.forget_computed(id);
+        if (row.baseline_of !== null) this._remove(this._baselines, row.baseline_of, id);
+        else if (row.parent !== null) {
+          this._remove(this._item_children, row.parent, id);
+          const names = this._names.get(row.parent);
+          if (names?.get(row.name) === id) this._drop(names, row.name);
+        }
+        this._drop(this._modules, id);
+        this._drop(this._items, id);
+        this.total_changes += 1;
+      }
+      this._link_module_paths = null;
+    });
+  }
+
+  // A folder becomes a project, or a project a folder.
+  set_project(item_id: number, project: boolean): void {
+    this.transaction(() => {
+      const item = this.item(item_id);
+      if (item_id === ROOT || item.kind !== (project ? "folder" : "project")) {
+        throw new StoreError(`${this.path(item_id)} is not a ${project ? "folder" : "project"}`);
+      }
+      this._require(item_id, _DATA_RIGHTS, "convert between folder and project");
+      this._update_item(item_id, "kind", project ? "project" : "folder");
+      this._stamp(item_id);
+    });
   }
 
   prefix(module_id: number): string {
@@ -811,8 +1056,9 @@ export class Store {
   // Attribute types and definitions
   // =====================================================================
 
-  _insert_type(module_id: number, name: string, base: string, values: readonly string[]): void {
-    this._put(this._data(module_id).types, name, { base, vals: [...values] });
+  _insert_type(module_id: number, name: string, base: string, values: readonly string[],
+               extras: TypeExtras = {}): void {
+    this._put(this._data(module_id).types, name, { ..._type_extras(extras), base, vals: [...values] });
     this.total_changes += 1;
   }
 
@@ -829,31 +1075,119 @@ export class Store {
   types(module_id: number): AttrType[] {
     const out: AttrType[] = [];
     for (const [name, row] of this._modules.get(module_id)?.types ?? []) {
-      out.push(new AttrType(module_id, name, row.base, [...row.vals]));
+      out.push(new AttrType(module_id, name, row.base, [...row.vals], row));
     }
     return out;
   }
 
-  create_type(module_id: number, name: string, base: string, values: readonly string[] = []): void {
+  create_type(module_id: number, name: string, base: string, values: readonly string[] = [],
+              extras: TypeExtras = {}): void {
     this.transaction(() => {
       this._writable(module_id);
-      if (!BASE_TYPES.includes(base)) throw new StoreError(`unknown base type ${_repr(base)}`);
-      if ((base === "Enumeration") !== (values.length > 0)) {
-        throw new StoreError("an enumeration type needs values, and no other type takes them");
-      }
-      if (new Set(values).size !== values.length) throw new StoreError("enumeration values must be unique");
+      this._require(module_id, RIGHTS.create, "create an attribute type");
+      _check_type(base, values, extras);
       if (this._modules.get(module_id)?.types.has(name)) {
         throw new StoreError(`type ${_repr(name)} already exists`);
       }
-      this._insert_type(module_id, name, base, values);
+      this._insert_type(module_id, name, base, values, extras);
       this._stamp(module_id);
     });
+  }
+
+  // Names of the attributes defined with a type.
+  type_users(module_id: number, name: string): string[] {
+    return [...this._modules.get(module_id)?.defs ?? []]
+      .filter(([, def]) => def.type_name === name).map(([attr]) => attr);
+  }
+
+  _own_type(module_id: number, name: string): _TypeRow {
+    this._writable(module_id);
+    if (SYSTEM_TYPE_NAMES.includes(name)) throw new StoreError(`${_repr(name)} is a system type`);
+    const row = this._modules.get(module_id)?.types.get(name);
+    if (!row) throw new StoreError(`no attribute type ${_repr(name)} in this module`);
+    return row;
+  }
+
+  // Change a type. `changes` holds only what is to change. While the type is in
+  // use its base type stays, and its values can be renamed in place or added at
+  // the end (`keeping` says the caller means that), never removed or reordered.
+  modify_type(module_id: number, name: string,
+              changes: TypeExtras & { name?: string; base?: string; values?: readonly string[] },
+              keeping: boolean = false): void {
+    this.transaction(() => {
+      const row = this._own_type(module_id, name);
+      this._require(module_id, RIGHTS.modify, "modify an attribute type");
+      const data = this._modules.get(module_id)!;
+      const users = this.type_users(module_id, name);
+      const base = changes.base ?? row.base;
+      const values = changes.values ?? (base === "Enumeration" ? row.vals : []);
+      const renamed = changes.name ?? name;
+      if (!renamed) throw new StoreError("a type needs a name");
+      if (renamed !== name && data.types.has(renamed)) throw new StoreError(`type ${_repr(renamed)} already exists`);
+      const next: _TypeRow = { ...row, base, vals: [...values] };
+      for (const key of _TYPE_EXTRAS) if (changes[key] !== undefined) delete next[key];
+      Object.assign(next, _type_extras(changes));
+      if (base !== row.base) {
+        for (const key of _TYPE_EXTRAS) if (key !== "description" && changes[key] === undefined) delete next[key];
+      }
+      _check_type(base, values, next);
+      const same = values.length === row.vals.length && values.every((v, i) => v === row.vals[i]);
+      if (users.length && base !== row.base) {
+        throw new StoreError(`type ${_repr(name)} is in use, so its base type cannot be changed`);
+      }
+      if (users.length && !same && !(keeping && values.length >= row.vals.length)) {
+        throw new StoreError(`type ${_repr(name)} is in use: its values can only be renamed in place or added to`);
+      }
+      const renames = new Map(row.vals.map((v, i) => [v, values[i]]));
+      this._drop(data.types, name);
+      this._put(data.types, renamed, next);
+      for (const attr of users) {
+        const def = data.defs.get(attr)!;
+        this._assign(def, "type_name", renamed);
+        if (same) continue;
+        const moved = (held: string) => held ? held.split("\n").map((v) => renames.get(v) ?? v).join("\n") : "";
+        this._assign(def, "dflt", moved(def.dflt));
+        for (const held of data.values.values()) {
+          if (held.has(attr)) this._put(held, attr, moved(held.get(attr)!));
+        }
+        if (data.module_values.has(attr)) this._put(data.module_values, attr, moved(data.module_values.get(attr)!));
+      }
+      for (const attr of users) this._check_values(module_id, attr);
+      for (const attr of users) this.forget_computed(module_id, attr);
+      this.total_changes += 1;
+      this._record(module_id, null, "modifyType", renamed);
+    });
+  }
+
+  delete_type(module_id: number, name: string): void {
+    this.transaction(() => {
+      this._own_type(module_id, name);
+      this._require(module_id, RIGHTS.delete, "delete an attribute type");
+      const users = this.type_users(module_id, name);
+      if (users.length) throw new StoreError(`type ${_repr(name)} is used by ${users.map(_repr).join(", ")}`);
+      this._drop(this._modules.get(module_id)!.types, name);
+      this.total_changes += 1;
+      this._record(module_id, null, "deleteType", name);
+    });
+  }
+
+  // Refuse if a value already held no longer suits the attribute's definition.
+  _check_values(module_id: number, name: string): void {
+    const definition = this.attribute(module_id, name)!;
+    const data = this._modules.get(module_id)!;
+    const held = [definition.default, data.module_values.get(name) ?? "",
+                  ...[...data.values.values()].map((v) => v.get(name) ?? "")];
+    for (const value of held) {
+      if (Store.check_value(definition, value) !== value) {
+        throw new StoreError(`${name}: the value ${_repr(value)} would have to be converted; change it first`);
+      }
+    }
   }
 
   _definition(module_id: number, name: string, def: _DefRow): AttrDef {
     const type = this._modules.get(module_id)!.types.get(def.type_name)!;
     return new AttrDef(module_id, name, def.type_name, type.base, def.scope, Boolean(def.multi), def.dflt,
-                       [...type.vals], def.dxl ?? "");
+                       [...type.vals], def.dxl ?? "", { ...def, min: type.min, max: type.max });
   }
 
   // Attribute definitions in creation order; scope null means both.
@@ -876,9 +1210,11 @@ export class Store {
   }
 
   create_attribute(module_id: number, name: string, type_name: string = "String", scope: string = "object",
-                   multi: boolean = false, default_: string = "", dxl: string = ""): void {
+                   multi: boolean = false, default_: string = "", dxl: string = "",
+                   extras: DefExtras = {}): void {
     this.transaction(() => {
       this._writable(module_id);
+      this._require(module_id, RIGHTS.create, "create an attribute");
       if (!name || SYSTEM_ATTRIBUTES.includes(name)) {
         throw new StoreError(`not a usable attribute name: ${_repr(name)}`);
       }
@@ -897,6 +1233,8 @@ export class Store {
           + "without a default");
       }
       this._insert_attr(module_id, name, type_name, scope, multi, "", dxl);
+      Object.assign(this._modules.get(module_id)!.defs.get(name)!, _def_extras(extras));
+      _check_inherit(name, scope, extras.inherit ?? false, dxl);
       if (default_) {
         default_ = Store.check_value(this.attribute(module_id, name)!, default_);
         this._assign(this._modules.get(module_id)!.defs.get(name)!, "dflt", default_);
@@ -906,12 +1244,78 @@ export class Store {
     });
   }
 
+  // Change an attribute definition; `changes` holds only what is to change.
+  modify_attribute(module_id: number, name: string, changes: Omit<DefExtras, "min" | "max"> &
+    { name?: string; type_name?: string; multi?: boolean; default?: string; dxl?: string }): void {
+    this.transaction(() => {
+      this._writable(module_id);
+      this._require(module_id, RIGHTS.modify, "modify an attribute");
+      const old = this.attribute(module_id, name);
+      if (!old) throw new StoreError(`no attribute ${_repr(name)}`);
+      const data = this._modules.get(module_id)!;
+      if (STANDARD_ATTRIBUTES.some(([n]) => n === name)) {
+        throw new StoreError(`${_repr(name)} is a standard attribute and is not changed here`);
+      }
+      const renamed = changes.name ?? name;
+      if (!renamed || SYSTEM_ATTRIBUTES.includes(renamed)) {
+        throw new StoreError(`not a usable attribute name: ${_repr(renamed)}`);
+      }
+      if (renamed !== name && data.defs.has(renamed)) {
+        throw new StoreError(`attribute ${_repr(renamed)} already exists`);
+      }
+      const row: _DefRow = { ...data.defs.get(name)!, ..._def_extras(changes) };
+      row.type_name = changes.type_name ?? row.type_name;
+      const type = data.types.get(row.type_name);
+      if (!type) throw new StoreError(`no attribute type ${_repr(row.type_name)} in this module`);
+      row.multi = Number(changes.multi ?? Boolean(row.multi));
+      if (row.multi && type.base !== "Enumeration") {
+        throw new StoreError("only an enumeration attribute can be multi-valued");
+      }
+      row.dflt = changes.default ?? row.dflt;
+      const dxl = changes.dxl ?? row.dxl ?? "";
+      if (dxl) row.dxl = dxl; else delete row.dxl;
+      if (dxl && (row.scope !== "object" || row.multi || row.dflt)) {
+        throw new StoreError(`${renamed}: attribute DXL is only supported here on a single-valued object attribute `
+          + "without a default");
+      }
+      _check_inherit(renamed, row.scope, row.inherit ?? false, dxl);
+      if (dxl && !old.dxl && [...data.values.values()].some((held) => held.get(name))) {
+        throw new StoreError(`${renamed}: objects hold values for it, which attribute DXL would replace`);
+      }
+      this._drop(data.defs, name);
+      this._put(data.defs, renamed, row);
+      if (renamed !== name) {
+        for (const held of [data.module_values, ...data.values.values()]) {
+          if (!held.has(name)) continue;
+          this._put(held, renamed, held.get(name)!);
+          this._drop(held, name);
+        }
+        for (const [view, json] of data.views) {
+          const definition = JSON.parse(json);
+          if (_rename_in_view(definition, name, renamed)) this._put(data.views, view, JSON.stringify(definition));
+        }
+      }
+      if (row.dflt) row.dflt = Store.check_value(this.attribute(module_id, renamed)!, row.dflt);
+      // as in DOORS, values still holding the old default follow it to the new one
+      if (old.default && row.dflt !== old.default) {
+        for (const held of [data.module_values, ...data.values.values()]) {
+          if (held.get(renamed) === old.default) this._put(held, renamed, row.dflt);
+        }
+      }
+      this._check_values(module_id, renamed);
+      this.forget_computed(module_id, name);
+      this.total_changes += 1;
+      this._record(module_id, null, "modifyAttr", renamed);
+    });
+  }
+
   delete_attribute(module_id: number, name: string): void {
     this.transaction(() => {
       this._writable(module_id);
       if (STANDARD_ATTRIBUTES.some(([n]) => n === name)) {
         throw new StoreError(`${_repr(name)} is a standard attribute`);
       }
+      this._require(module_id, RIGHTS.delete, "delete an attribute");
       if (!this.attribute(module_id, name)) throw new StoreError(`no attribute ${_repr(name)}`);
       const data = this._modules.get(module_id)!;
       this._drop(data.defs, name);
@@ -931,14 +1335,18 @@ export class Store {
       if (!new RegExp(`^[${_SPACE}]*-?\\p{Nd}+[${_SPACE}]*$`, "u").test(value)) {
         throw new StoreError(`${name}: ${_repr(value)} is not an integer`);
       }
-      return String(BigInt(_ascii_digits(_strip(value))));
+      const whole = String(BigInt(_ascii_digits(_strip(value))));
+      _check_range(definition, whole);
+      return whole;
     }
     if (base === "Real") {
       if (!_is_float(value)) throw new StoreError(`${name}: ${_repr(value)} is not a number`);
+      _check_range(definition, value);
     } else if (base === "Date") {
       if (parse_date(value) === null) {
         throw new StoreError(`${name}: ${_repr(value)} is not a date (use YYYY-MM-DD)`);
       }
+      _check_range(definition, _strip(value));
       return _strip(value);
     } else if (base === "Enumeration") {
       const chosen = definition.multi ? value.split("\n") : [value];
@@ -973,6 +1381,7 @@ export class Store {
       if (definition === null || definition.scope !== "module") {
         throw new StoreError(`unknown module attribute ${_repr(name)}`);
       }
+      this._require(module_id, RIGHTS.modify, "change a module attribute");
       value = Store.check_value(definition, value);
       this._put(this._modules.get(module_id)!.module_values, name, value);
       this._stamp(module_id);
@@ -1080,6 +1489,9 @@ export class Store {
     return this.transaction(() => {
       this._writable(module_id);
       if (this.item(module_id).kind !== "formal") throw new StoreError("objects live in formal modules");
+      const anchor = after || before;
+      const under = anchor ? this.parent_object(anchor) : parent;
+      this._require(under ?? module_id, RIGHTS.create, "create an object");
       const [up, position] = this._place(module_id, parent, after, before);
       const absno = this._items.get(module_id)!.next_absno;
       this._update_item(module_id, "next_absno", absno + 1);
@@ -1094,10 +1506,17 @@ export class Store {
       this.total_changes += 1;
       const obj = new Obj(module_id, absno);
       this._record(module_id, absno, "createObject");
-      const wanted = new Map<string, string>();
-      for (const a of this.attributes(module_id)) if (a.default) wanted.set(a.name, a.default);
-      if (values) {
-        for (const [name, value] of values instanceof Map ? values : Object.entries(values)) wanted.set(name, value);
+      const wanted = new Map<string, string>(values instanceof Map ? values : Object.entries(values ?? {}));
+      // defaults are the database's own doing, so creating needs no modify access for them
+      const guarded = this._guarded;
+      this._guarded = false;
+      try {
+        // an inherited attribute's default is only seen where no ancestor has a value
+        for (const a of this.attributes(module_id)) {
+          if (a.default && !a.inherit && !wanted.has(a.name)) this.set_value(obj, a.name, a.default);
+        }
+      } finally {
+        this._guarded = guarded;
       }
       for (const [name, value] of wanted) this.set_value(obj, name, value);
       return obj;
@@ -1141,6 +1560,12 @@ export class Store {
         if (target.equals(obj)) throw new StoreError("an object cannot be moved inside itself");
         target = this.parent_object(target);
       }
+      if (this._guarded) { // which rights a move needs is not settled, so it needs them all
+        for (const thing of [obj, this.parent_object(obj) ?? obj.module_id,
+          (anchor ? this.parent_object(anchor) : parent) ?? obj.module_id]) {
+          this._require(thing, _DATA_RIGHTS, "move an object");
+        }
+      }
       const [up, position] = this._place(obj.module_id, parent, after, before);
       const data = this._modules.get(obj.module_id);
       const row = data?.objects.get(obj.absno);
@@ -1177,6 +1602,7 @@ export class Store {
       if (kids.some((c) => !c.deleted)) {
         throw new StoreError(`${this.identifier(obj)} has children; delete them first`);
       }
+      this._require(obj, RIGHTS.delete, "delete an object");
       this._set_deleted(obj, 1);
       this._touch(obj, "deleteObject");
     });
@@ -1187,8 +1613,28 @@ export class Store {
       this._writable(obj.module_id);
       const up = this.parent_object(obj);
       if (up && this.is_deleted(up)) throw new StoreError("undelete its parent first");
+      this._require(obj, RIGHTS.delete, "undelete an object");
       this._set_deleted(obj, 0);
       this._touch(obj, "unDeleteObject");
+    });
+  }
+
+  // Remove one object for good, with its links. It may have no children at all.
+  purge_object(obj: Obj): void {
+    this.transaction(() => {
+      this._writable(obj.module_id);
+      const data = this._modules.get(obj.module_id)!;
+      const row = this._object_row(obj);
+      if (data.kids.get(obj.absno)?.length) throw new StoreError(`${this.identifier(obj)} still has children`);
+      this._require(obj, RIGHTS.delete, "purge an object");
+      for (const index of [this._outgoing, this._incoming]) {
+        for (const id of [...index.get(obj.key) ?? []]) this._delete_link_row(id);
+      }
+      this._detach(data, row);
+      this._drop(data.objects, obj.absno);
+      this._drop(data.values, obj.absno);
+      this.total_changes += 1;
+      this._record(obj.module_id, obj.absno, "purgeObject");
     });
   }
 
@@ -1203,6 +1649,7 @@ export class Store {
         if (data!.kids.get(obj.absno)?.length) {
           throw new StoreError(`${this.identifier(obj)} still has children`);
         }
+        this._require(obj, RIGHTS.delete, "purge an object");
         for (const index of [this._outgoing, this._incoming]) {
           for (const id of [...index.get(obj.key) ?? []]) this._delete_link_row(id);
         }
@@ -1255,6 +1702,10 @@ export class Store {
     if (!definition || definition.scope !== "object") {
       throw new StoreError(`unknown attribute ${_repr(name)} in ${this.path(obj.module_id)}`);
     }
+    if (definition.inherit) { // top-level objects take nothing from the module
+      const up = this.parent_object(obj);
+      return up ? this.value(up, name) : definition.dflt;
+    }
     if (definition.dxl) {
       this._object_row(obj);
       if (!Store.dxl_engine) throw new AttrDxlError(`${_repr(name)} needs the DXL engine`, "#DXL error: no engine");
@@ -1290,14 +1741,27 @@ export class Store {
     }
   }
 
-  // Map absno -> Map name -> value, for a whole module in one go. These are the
-  // stored values: attributes calculated by DXL are not among them.
-  values(module_id: number): Map<number, Map<string, string>> {
+  // Whether the object holds a value of its own (and so does not inherit one).
+  has_own_value(obj: Obj, name: string): boolean {
+    this._object_row(obj);
+    return this._modules.get(obj.module_id)!.values.get(obj.absno)?.has(name) ?? false;
+  }
+
+  // Map absno -> Map name -> value, for a whole module in one go. Attributes
+  // calculated by DXL are not among them. Inherited values are, unless `own`.
+  values(module_id: number, own: boolean = false): Map<number, Map<string, string>> {
     const out = new Map<number, Map<string, string>>();
-    const held = this._modules.get(module_id)?.values;
-    if (!held) return out;
-    for (const absno of [...held.keys()].sort((a, b) => a - b)) {
-      const mine = held.get(absno)!;
+    const data = this._modules.get(module_id);
+    if (!data) return out;
+    const held = data.values;
+    const inherited = own ? [] : [...data.defs].filter(([, d]) => d.inherit && d.scope === "object").map(([n]) => n);
+    const absnos = inherited.length ? data.objects.keys() : held.keys();
+    for (const absno of [...absnos].sort((a, b) => a - b)) {
+      const mine = new Map(held.get(absno) ?? []);
+      for (const name of inherited) {
+        const value = this.value(new Obj(module_id, absno), name);
+        if (value && !mine.has(name)) mine.set(name, value);
+      }
       if (mine.size) out.set(absno, new Map([...mine].sort((a, b) => _cmp(a[0], b[0]))));
     }
     return out;
@@ -1315,16 +1779,40 @@ export class Store {
         throw new StoreError(`${_repr(name)} is calculated by attribute DXL and cannot be given a value here `
           + "(in DXL, assign (string null) to have it calculated again)");
       }
+      this._require(obj, RIGHTS.modify, "change an attribute value");
       value = Store.check_value(definition, value);
       this._object_row(obj);
       const old = this.value(obj, name);
-      if (old === value) return;
+      // an inherited value given again becomes the object's own
+      if (old === value && !(definition.inherit && !this.has_own_value(obj, name))) {
+        // an object older than its attribute's default, given the value it showed:
+        // note that it now has been given one
+        if (definition.default && !definition.inherit && !this.has_own_value(obj, name)) {
+          const data = this._modules.get(obj.module_id)!;
+          let held = data.values.get(obj.absno);
+          if (!held) this._put(data.values, obj.absno, held = new Map());
+          this._put(held, name, value);
+          this.total_changes += 1;
+        }
+        return;
+      }
       const data = this._modules.get(obj.module_id)!;
       let held = data.values.get(obj.absno);
       if (!held) this._put(data.values, obj.absno, held = new Map());
       this._put(held, name, value);
       this.total_changes += 1;
-      this._touch(obj, "modifyObject", name, old, value);
+      if (definition.history && definition.dates) {
+        this._touch(obj, "modifyObject", name, old, value);
+        return;
+      }
+      if (definition.history) this._record(obj.module_id, obj.absno, "modifyObject", name, old, value);
+      else this._stamp(obj.module_id);
+      const row = this._object_row(obj);
+      this._assign(row, "changed_seq", this._seq); // still a change as far as suspect links go
+      if (definition.dates) {
+        this._assign(row, "modified_by", this.user);
+        this._assign(row, "modified_on", this.now());
+      }
     });
   }
 
@@ -1343,6 +1831,83 @@ export class Store {
       if (name === "*" || path === name || path.slice(path.lastIndexOf("/") + 1) === name) out.add(id);
     }
     return out;
+  }
+
+  // The user's default link module, if one was set: a name, looked for beside
+  // the source module, or a full path. Created if missing.
+  set_default_link_name(name: string): void {
+    this.transaction(() => {
+      if (!name || (name.includes("/") && !name.startsWith("/"))) {
+        throw new StoreError("the default link module is a name, or a full path starting with /");
+      }
+      const before = this.default_link_name;
+      this.default_link_name = name;
+      this._undo(() => { this.default_link_name = before; });
+      this.total_changes += 1;
+    });
+  }
+
+  _user_default_module(source_module: number): number {
+    const wanted = this.default_link_name!;
+    const beside = this.item(source_module).parent!;
+    const found = this.module_at(wanted, "link", beside);
+    if (found !== null) return found;
+    if (!wanted.startsWith("/")) return this.create_link_module(this.path(beside), wanted);
+    const slash = wanted.lastIndexOf("/");
+    return this.create_link_module(wanted.slice(0, slash) || "/", wanted.slice(slash + 1));
+  }
+
+  // =====================================================================
+  // Linksets: a link module's links from one module to another
+  // =====================================================================
+
+  linksets(link_module: number): [number, number][] {
+    const seen = new Map<string, [number, number]>();
+    for (const [a, b] of this._items.get(link_module)?.linksets ?? []) {
+      if (this._items.has(a) && this._items.has(b)) seen.set(`${a}:${b}`, [a, b]);
+    }
+    for (const row of this._links.values()) {
+      if (row.link_module !== link_module || this.is_baseline(row.source_module)) continue;
+      seen.set(`${row.source_module}:${row.target_module}`, [row.source_module, row.target_module]);
+    }
+    return [...seen.values()].sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  }
+
+  create_linkset(link_module: number, source_module: number, target_module: number): void {
+    this.transaction(() => {
+      if (this.item(link_module).kind !== "link") throw new StoreError("linksets belong to a link module");
+      for (const end of [source_module, target_module]) {
+        if (this.item(end).kind !== "formal") throw new StoreError("a linkset joins two formal modules");
+      }
+      if (this.linksets(link_module).some(([a, b]) => a === source_module && b === target_module)) {
+        throw new StoreError("that linkset already exists");
+      }
+      this._require(link_module, RIGHTS.create, "create a linkset");
+      const row = this._items.get(link_module)!;
+      this._assign(row, "linksets", [...row.linksets ?? [], [source_module, target_module]]);
+      this.total_changes += 1;
+    });
+  }
+
+  // Deleting a linkset deletes the links in it.
+  delete_linkset(link_module: number, source_module: number, target_module: number): void {
+    this.transaction(() => {
+      if (!this.linksets(link_module).some(([a, b]) => a === source_module && b === target_module)) {
+        throw new StoreError("there is no such linkset");
+      }
+      this._require(link_module, RIGHTS.delete, "delete a linkset");
+      for (const row of [...this._links.values()]) {
+        if (row.link_module === link_module && row.source_module === source_module
+            && row.target_module === target_module) {
+          this.delete_link(new Link(row.id, link_module, new Obj(source_module, row.source_absno),
+                                    new Obj(target_module, row.target_absno)));
+        }
+      }
+      const row = this._items.get(link_module)!;
+      this._assign(row, "linksets",
+        (row.linksets ?? []).filter(([a, b]) => a !== source_module || b !== target_module));
+      this.total_changes += 1;
+    });
   }
 
   // The project's "satisfies" link module, created if missing, beside
@@ -1385,8 +1950,14 @@ export class Store {
         if (this.is_deleted(end)) throw new StoreError(`${this.identifier(end)} is deleted`);
       }
       if (source.equals(target)) throw new StoreError("an object cannot link to itself");
+      this._require(source, RIGHTS.modify, "create a link");
+      const covering = this.descriptors_between(source.module_id, target.module_id);
       let module: number;
-      if (link_module === null) {
+      if (link_module === null && new Set(covering.map((c) => c.module)).size === 1) {
+        module = covering[0].module;
+      } else if (link_module === null && this.default_link_name !== null) {
+        module = this._user_default_module(source.module_id);
+      } else if (link_module === null) {
         module = this.default_link_module(source.module_id);
       } else if (link_module.startsWith("/")) {
         const found = this.module_at(link_module, "link");
@@ -1401,6 +1972,17 @@ export class Store {
         }
         module = matches.size ? [...matches][0] : this.create_link_module(
           this.path(this.item(source.module_id).parent!), link_module);
+      }
+      const bound = covering.find((c) => !c.descriptor.overridable);
+      if (bound && module !== bound.module) {
+        throw new StoreError(`links from ${this.path(source.module_id)} to ${this.path(target.module_id)} must go `
+          + `through ${this.path(bound.module)}: its link module descriptor is not overridable`);
+      }
+      this._require(module, _DATA_RIGHTS, "create a link through a link module");
+      const folder = this.item(source.module_id).parent!;
+      if (this.links_exclusive(folder, source.module_id) && !covering.some((c) => c.module === module)) {
+        throw new StoreError(`links out of ${this.path(source.module_id)} are limited to its link module `
+          + `descriptors, and none allows this one through ${this.path(module)}`);
       }
       for (const id of this._outgoing.get(source.key) ?? []) {
         const row = this._links.get(id)!;
@@ -1424,6 +2006,8 @@ export class Store {
   delete_link(link: Link): void {
     this.transaction(() => {
       this._writable(link.source.module_id);
+      this._require(link.source, RIGHTS.modify, "delete a link");
+      this._require(link.link_module, _DATA_RIGHTS, "delete a link through a link module");
       this._delete_link_row(link.id);
       this._record(link.source.module_id, link.source.absno, "deleteLink", "", this.identifier(link.target), "",
                    link.target.absno);
@@ -1483,11 +2067,269 @@ export class Store {
     this.transaction(() => {
       const row = this._links.get(link.id);
       if (row) {
+        if (by_hand) this._require(link.source, RIGHTS.modify, "clear a suspect link");
         this._assign(row, "reviewed_seq", this._seq);
         if (by_hand) this._assign(row, "cleared", true);
         this.total_changes += 1;
       }
     });
+  }
+
+  // =====================================================================
+  // Access rights
+  //
+  // Rights are inherited down the tree: root, folders, modules, objects. The
+  // root gives everyone everything. There is no list of users or groups here,
+  // so a name that is not the current user's may be a group the user is in.
+  // Nothing may take away reading, so only changes have to be checked.
+  // =====================================================================
+
+  _access_row(thing: Guarded): { access?: AccessEntry[] } {
+    if (thing instanceof Obj) return this._object_row(thing);
+    const row = this._items.get(thing);
+    if (!row) throw new StoreError(`no item with id ${thing}`);
+    return row;
+  }
+
+  // The list that applies to a thing: its own or the nearest inherited one.
+  access_list(thing: Guarded): AccessEntry[] {
+    const own = this._access_row(thing).access;
+    if (own) return own.map((e) => ({ ...e }));
+    if (thing instanceof Obj) return this.access_list(this.parent_object(thing) ?? thing.module_id);
+    const row = this._items.get(thing)!;
+    const up = row.baseline_of ?? row.parent;
+    return up === null ? [{ name: null, rights: ALL_RIGHTS }] : this.access_list(up);
+  }
+
+  is_access_inherited(thing: Guarded): boolean {
+    return this._access_row(thing).access === undefined && thing !== ROOT;
+  }
+
+  // Whether the current user has every one of `rights`: "unknown" when that
+  // depends on which groups the user belongs to.
+  may(thing: Guarded, rights: number): "yes" | "no" | "unknown" {
+    if (!this._guarded) return "yes";
+    return this._decide(this.access_list(thing), rights);
+  }
+
+  _decide(list: AccessEntry[], rights: number): "yes" | "no" | "unknown" {
+    const mine = list.find((e) => e.name === this.user);
+    const has = (e: AccessEntry | undefined) => ((e?.rights ?? 0) & rights) === rights;
+    if (mine) return has(mine) ? "yes" : "no";
+    const everyone = list.find((e) => e.name === null);
+    const named = list.filter((e) => e.name !== null);
+    // in none of the named groups, the entry for everyone else; in some, their rights together
+    if (has(everyone) && named.every(has)) return "yes";
+    const together = named.reduce((sum, e) => sum | e.rights, 0);
+    return !has(everyone) && (together & rights) !== rights ? "no" : "unknown";
+  }
+
+  _require(thing: Guarded, rights: number, doing: string): void {
+    if (!this._guarded) return;
+    const list = this.access_list(thing);
+    const answer = this._decide(list, rights);
+    if (answer === "yes") return;
+    const what = thing instanceof Obj ? this.identifier(thing) : this.path(thing);
+    const need = rights_names(rights).join(", ");
+    if (answer === "no") {
+      throw new StoreError(`no access: ${doing} needs ${need} access to ${what}, which ${this.user} does not have`);
+    }
+    const names = list.filter((e) => e.name !== null).map((e) => _repr(e.name)).join(", ");
+    throw new StoreError(`cannot ${doing}: whether ${this.user} has ${need} access to ${what} depends on belonging `
+      + `to ${names}; give ${this.user} an entry to say`);
+  }
+
+  // Whether there is anything in a module the current user may certainly change.
+  may_edit(module_id: number): boolean {
+    if (!this._guarded) return true;
+    const changes = [RIGHTS.modify, RIGHTS.create, RIGHTS.delete];
+    const on = (thing: Guarded) => changes.some((right) => this.may(thing, right) === "yes");
+    return on(module_id) || this.objects(module_id, true).some((obj) => on(obj));
+  }
+
+  // every thing at and below an item must allow it
+  _require_within(item_id: number, rights: number, doing: string): void {
+    if (!this._guarded) return;
+    this._require(item_id, rights, doing);
+    for (const obj of this._modules.has(item_id) ? this.objects(item_id, true) : []) {
+      if (this._object_row(obj).access) this._require(obj, rights, doing);
+    }
+    for (const child of this._item_children.get(item_id) ?? []) this._require_within(child, rights, doing);
+  }
+
+  _set_access_list(thing: Guarded, list: AccessEntry[] | undefined): void {
+    if (thing === ROOT) throw new StoreError("the access rights of the database root cannot be changed here");
+    const module = thing instanceof Obj ? thing.module_id : thing;
+    this._writable(module);
+    if (list) {
+      if (!list.some((e) => e.rights & RIGHTS.control)) {
+        throw new StoreError("access rights in which nobody has control are not supported here");
+      }
+      if (this._decide(list, RIGHTS.read) !== "yes") {
+        throw new StoreError(`access rights under which ${this.user} might not be able to read are not supported `
+          + "here: nothing can be hidden");
+      }
+      const before = this._guarded;
+      this._guarded = true;
+      this._undo(() => { this._guarded = before; });
+    }
+    this._assign(this._access_row(thing), "access", list);
+    this._stamp(module);
+    this.total_changes += 1;
+  }
+
+  // Give a thing a list of its own, the same as the one it inherits.
+  make_access_specific(thing: Guarded): void {
+    this.transaction(() => {
+      this._require(thing, RIGHTS.control, "change access rights");
+      if (this._access_row(thing).access === undefined) this._set_access_list(thing, this.access_list(thing));
+    });
+  }
+
+  make_access_inherited(thing: Guarded): void {
+    this.transaction(() => {
+      this._require(thing, RIGHTS.control, "change access rights");
+      if (this._access_row(thing).access !== undefined) {
+        this._set_access_list(thing, undefined);
+        if (this.may(thing, RIGHTS.read) !== "yes") throw new StoreError("nothing can be hidden here");
+      }
+    });
+  }
+
+  _own_access(thing: Guarded): AccessEntry[] {
+    this._require(thing, RIGHTS.control, "change access rights");
+    const own = this._access_row(thing).access;
+    if (!own) throw new StoreError("the access rights are inherited; make them specific first");
+    return own;
+  }
+
+  set_access(thing: Guarded, name: string | null, rights: number): void {
+    this.transaction(() => {
+      const others = this._own_access(thing).filter((e) => e.name !== name);
+      this._set_access_list(thing, [...others, { name, rights: closed_rights(rights) }]);
+    });
+  }
+
+  // Remove one name's entry; `name` null removes every entry but everyone else's.
+  unset_access(thing: Guarded, name: string | null): void {
+    this.transaction(() => {
+      const own = this._own_access(thing);
+      if (name !== null && !own.some((e) => e.name === name)) {
+        throw new StoreError(`there is no access entry for ${_repr(name)}`);
+      }
+      this._set_access_list(thing, own.filter((e) => name === null ? e.name === null : e.name !== name));
+    });
+  }
+
+  // A whole list at once, as a file being loaded gives it.
+  restore_access(thing: Guarded, list: AccessEntry[]): void {
+    this.transaction(() => {
+      this._require(thing, RIGHTS.control, "change access rights");
+      this._set_access_list(thing, list.map((e) => ({ name: e.name, rights: closed_rights(e.rights) })));
+    });
+  }
+
+  // What a Database Manager does for a list that has shut everyone present out.
+  // Not checked, and for no script: the interface may offer it.
+  reset_access(thing: Guarded): void {
+    this.transaction(() => this._set_access_list(thing, undefined));
+  }
+
+  // =====================================================================
+  // Link module descriptors
+  // =====================================================================
+
+  link_descriptors(folder_id: number): LinkDescriptor[] {
+    return (this._items.get(folder_id)?.descriptors ?? []).map((d) => ({ ...d }));
+  }
+
+  _descriptor_folder(folder_id: number): _ItemRow {
+    const item = this.item(folder_id);
+    if (folder_id === ROOT || (item.kind !== "folder" && item.kind !== "project")) {
+      throw new StoreError("link module descriptors belong to a folder or project below the database root");
+    }
+    this._require(folder_id, _DATA_RIGHTS, "change link module descriptors");
+    return this._items.get(folder_id)!;
+  }
+
+  add_link_descriptor(folder_id: number, descriptor: LinkDescriptor, description: string = ""): void {
+    this.transaction(() => {
+      const row = this._descriptor_folder(folder_id);
+      const { source, target, linkmod } = descriptor;
+      // the modules named need not exist yet; a source that does must be in this folder
+      const from = this.find(source, folder_id);
+      if (!source || !target || !linkmod) throw new StoreError("a descriptor names a source, target and link module");
+      if (from !== null && (this.item(from).kind !== "formal" || this.item(from).parent !== folder_id)) {
+        throw new StoreError(`${_repr(source)} is not a formal module in ${this.path(folder_id)}`);
+      }
+      if ((row.descriptors ?? []).some((d) => d.source === source && d.target === target)) {
+        throw new StoreError(`there is already a descriptor for ${_repr(source)} and ${_repr(target)}`);
+      }
+      if (this.module_at(linkmod, "link", folder_id) === null) {
+        const slash = linkmod.lastIndexOf("/");
+        const parent = slash < 0 ? folder_id : this.find(linkmod.slice(0, slash) || "/", folder_id);
+        if (parent === null) throw new StoreError(`no folder for link module ${_repr(linkmod)}`);
+        this.create_link_module(this.path(parent), linkmod.slice(slash + 1), description);
+      }
+      this._assign(row, "descriptors", [...row.descriptors ?? [], { ...descriptor }]);
+      this._stamp(folder_id);
+      this.total_changes += 1;
+    });
+  }
+
+  remove_link_descriptor(folder_id: number, source: string, target: string): void {
+    this.transaction(() => {
+      const row = this._descriptor_folder(folder_id);
+      const at = (row.descriptors ?? []).findIndex((d) => d.source === source && d.target === target);
+      if (at < 0) throw new StoreError(`no descriptor for ${_repr(source)} and ${_repr(target)}`);
+      this._assign(row, "descriptors", row.descriptors!.filter((_, i) => i !== at));
+      this._stamp(folder_id);
+      this.total_changes += 1;
+    });
+  }
+
+  set_link_descriptor(folder_id: number, source: string, target: string,
+                      changes: { overridable?: boolean; mandatory?: boolean }): void {
+    this.transaction(() => {
+      const row = this._descriptor_folder(folder_id);
+      const found = (row.descriptors ?? []).find((d) => d.source === source && d.target === target);
+      if (!found) throw new StoreError(`no descriptor for ${_repr(source)} and ${_repr(target)}`);
+      this._assign(row, "descriptors", row.descriptors!.map((d) => d === found ? { ...d, ...changes } : d));
+      this.total_changes += 1;
+    });
+  }
+
+  // Whether links out of a module in the folder are limited to its descriptors.
+  links_exclusive(folder_id: number, module_id: number): boolean {
+    return this._items.get(folder_id)?.exclusive?.includes(module_id) ?? false;
+  }
+
+  set_links_exclusive(folder_id: number, module_id: number, flag: boolean): void {
+    this.transaction(() => {
+      const row = this._descriptor_folder(folder_id);
+      if (this.item(module_id).parent !== folder_id || this.item(module_id).kind !== "formal") {
+        throw new StoreError("the module is not a formal module of that folder");
+      }
+      const others = (row.exclusive ?? []).filter((m) => m !== module_id);
+      this._assign(row, "exclusive", flag ? [...others, module_id] : others);
+      this.total_changes += 1;
+    });
+  }
+
+  // The descriptors that cover links from one module to another, with the ids
+  // of their link modules.
+  descriptors_between(source_module: number, target_module: number): { descriptor: LinkDescriptor; module: number }[] {
+    const folder = this._items.get(source_module)?.parent;
+    if (folder === null || folder === undefined) return [];
+    const out: { descriptor: LinkDescriptor; module: number }[] = [];
+    for (const descriptor of this.link_descriptors(folder)) {
+      const module = this.module_at(descriptor.linkmod, "link", folder);
+      if (module !== null && this.find(descriptor.source, folder) === source_module
+          && this.find(descriptor.target, folder) === target_module) {
+        out.push({ descriptor, module });
+      }
+    }
+    return out;
   }
 
   // =====================================================================
@@ -1527,6 +2369,7 @@ export class Store {
       this._writable(module_id);
       const item = this.item(module_id);
       if (item.kind !== "formal") throw new StoreError("only formal modules are baselined");
+      this._require(module_id, RIGHTS.modify, "create a baseline");
       const existing = this.baselines(module_id);
       let number: [number, number];
       if (!existing.length) {
@@ -1541,7 +2384,7 @@ export class Store {
         major: number[0], minor: number[1], suffix, annotation, created_by: this.user, created_on: stamp,
       });
       const from = this._data(module_id), to = this._data(copy);
-      for (const [name, row] of from.types) this._put(to.types, name, { base: row.base, vals: [...row.vals] });
+      for (const [name, row] of from.types) this._put(to.types, name, { ...row, vals: [...row.vals] });
       for (const [name, row] of from.defs) this._put(to.defs, name, { ...row });
       for (const [name, value] of from.module_values) this._put(to.module_values, name, value);
       for (const [absno, row] of from.objects) this._put(to.objects, absno, { ...row });
@@ -1610,6 +2453,7 @@ export class Store {
     this.transaction(() => {
       this._writable(module_id);
       if (!name) throw new StoreError("a view needs a name");
+      this._require(module_id, _DATA_RIGHTS, "save a view");
       const json = JSON.stringify(definition, (_, v) => (v instanceof Map ? Object.fromEntries(v) : v));
       this._put(this._data(module_id).views, name, json);
       this.total_changes += 1;
@@ -1619,6 +2463,7 @@ export class Store {
   delete_view(module_id: number, name: string): void {
     this.transaction(() => {
       const held = this._modules.get(module_id)?.views;
+      if (held?.has(name)) this._require(module_id, _DATA_RIGHTS, "delete a view");
       if (held && this._drop(held, name)) this.total_changes += 1;
     });
   }
@@ -1634,6 +2479,8 @@ export class Store {
       db_path: this.db_path,
       user: this.user,
       seq: this._seq,
+      max_item: this._max_item,
+      ...(this.default_link_name === null ? {} : { default_link_module: this.default_link_name }),
       items: [...this._items.values()],
       modules: [...this._modules].map(([id, m]) => ({
         id,
@@ -1692,6 +2539,10 @@ export class Store {
     }
     for (const row of data.links) store._insert_link(row);
     store._seq = data.seq;
+    store._max_item = Math.max(store._max_item, data.max_item ?? 0);
+    store.default_link_name = data.default_link_module ?? null;
+    store._guarded = [...store._items.values(), ...[...store._modules.values()].flatMap((m) => [...m.objects.values()])]
+      .some((row) => row.access !== undefined);
     store.total_changes = 0;
     return store;
   }

@@ -70,6 +70,13 @@ export function names_for(rt: any, module_id: any, scope: string): string[] {
   return definitions(rt, module_id).filter((d) => applies(d, scope)).map((d) => d.name);
 }
 
+// spec key -> store key, for the settings that are not positional
+const SPEC_EXTRAS = ["description", "inherit", "hidden", "history", "bars", "dates"];
+
+function spec_extras(spec: Map<string, any>): any {
+  return Object.fromEntries(SPEC_EXTRAS.filter((k) => spec.has(k)).map((k) => [k, spec.get(k)]));
+}
+
 export function create_definition(rt: any, spec: Map<string, any>): any {
   const module_id = rt.editing(current_module(rt));
   const name = spec.get("name");
@@ -78,8 +85,76 @@ export function create_definition(rt: any, spec: Map<string, any>): any {
     spec.has("scope") ? spec.get("scope") : "object",
     spec.has("multi") ? spec.get("multi") : false,
     spec.has("default") ? spec.get("default") : "",
-    spec.has("dxl") ? spec.get("dxl") : "");
+    spec.has("dxl") ? spec.get("dxl") : "", spec_extras(spec));
   return rt.store.attribute(module_id, name);
+}
+
+// A definition's module, ready to be changed.
+function changing(rt: any, definition: any): number {
+  rt.need(definition, "AttrDef");
+  const module_id = rt.editing(definition.module_id);
+  if (!rt.store.attribute(module_id, definition.name)) {
+    throw new Fault(`${_repr(definition.name)} is a system attribute, or the definition has gone: it cannot be `
+      + "modified here");
+  }
+  return module_id;
+}
+
+function modified(rt: any, definition: any, changes: any): any {
+  const module_id = changing(rt, definition);
+  rt.store.modify_attribute(module_id, definition.name, changes);
+  return rt.store.attribute(module_id, changes.name ?? definition.name);
+}
+
+// `modify(ad, object type "Integer" attribute "x")`
+export function redefine(rt: any, definition: any, spec: Map<string, any>): any {
+  const old = rt.store.attribute(changing(rt, definition), definition.name);
+  // what DOORS does with a setting the new definition leaves out is not documented
+  const kept: [string, any, any][] = [["type", old.type_name, "String"], ["scope", old.scope, "object"],
+    ["multi", old.multi, false], ["default", old.default, ""], ["dxl", old.dxl, ""],
+    ["description", old.description, ""], ["inherit", old.inherit, false], ["hidden", old.hidden, false],
+    ["history", old.history, true], ["bars", old.bars, true], ["dates", old.dates, true]];
+  for (const [key, held, usual] of kept) {
+    if (!spec.has(key) && held !== usual) {
+      throw new Fault(`modify: say what ${key === "scope" ? "object or module" : key} the attribute is to have; `
+        + "what DOORS does when the new definition leaves it out is not documented");
+    }
+  }
+  if ((spec.get("scope") ?? "object") !== old.scope) {
+    throw new Fault("modify: moving an attribute between objects and the module is not supported here");
+  }
+  return modified(rt, definition, { name: spec.get("name"), type_name: spec.get("type"), multi: spec.get("multi"),
+    default: spec.get("default"), dxl: spec.get("dxl"), ...spec_extras(spec) });
+}
+
+// `modify(ad, setHistory, true)`: constant -> [value type, change]
+const SETTERS: [string, string, (d: any, v: any) => any][] = [
+  ["setName", "string", (d, v) => ({ name: v })],
+  ["setDefault", "string", (d, v) => ({ default: v })],
+  ["setDXL", "string", (d, v) => ({ dxl: v })],
+  ["setDescription", "string", (d, v) => ({ description: v })],
+  ["setBars", "bool", (d, v) => ({ bars: v })],
+  ["setDates", "bool", (d, v) => ({ dates: v })],
+  ["setHidden", "bool", (d, v) => ({ hidden: v })],
+  ["setHistory", "bool", (d, v) => ({ history: v })],
+  ["setInherit", "bool", (d, v) => ({ inherit: v })],
+  ["setMulti", "bool", (d, v) => ({ multi: v })],
+  ["setObject", "bool", (d, v) => keep_scope(d, "object", v)],
+  ["setModule", "bool", (d, v) => keep_scope(d, "module", v)]];
+
+function keep_scope(definition: any, scope: string, wanted: boolean): any {
+  if (wanted !== (definition.scope === scope)) {
+    throw new Fault("an attribute here applies to objects or to the module, and that cannot be changed");
+  }
+  return {};
+}
+
+function own_value(rt: any, owner: any, definition: any): boolean {
+  rt.need(definition, "AttrDef");
+  if (!definition.inherit) {
+    throw new Fault("hasSpecificValue is only supported here for an inherited attribute");
+  }
+  return rt.store.has_own_value(rt.obj(owner), definition.name);
 }
 
 export function delete_definition(rt: any, module_id: any, definition: any): string {
@@ -125,10 +200,11 @@ export function good_string(rt: any, kind: string): string {
   return "Create Object";
 }
 
-export function create_type(rt: any, name: string, base: string, values: any[], error: any): any {
+export function create_type(rt: any, name: string, base: string, values: any[], error: any,
+  extras: any = {}): any {
   const module_id = rt.editing(current_module(rt));
   try {
-    rt.store.create_type(module_id, name, base, [...values]);
+    rt.store.create_type(module_id, name, base, [...values], extras);
   } catch (e) {
     if (!(e instanceof StoreError)) throw e;
     error.set(e.message);
@@ -136,6 +212,109 @@ export function create_type(rt: any, name: string, base: string, values: any[], 
   }
   error.set("");
   return find_type(rt, module_id, name);
+}
+
+// a DXL array handed over whole: every element must have been given a value
+function whole(array: any[], what: string): any[] {
+  rt_need(array, what);
+  if (array.some((v) => v === undefined || v === null)) {
+    throw new Fault(`the array of ${what} has elements with no value; size it to the number of values`);
+  }
+  return [...array];
+}
+
+function rt_need(value: any, what: string): void {
+  if (value === null || value === undefined) throw new Fault(`null ${what}`);
+}
+
+function real_colours(rt: any): boolean {
+  return rt.state.get("real colours") === true;
+}
+
+// the numbers, colours or descriptions of an enumeration, if it was given them
+function related(type: any, list: readonly any[], what: string): any[] {
+  if (!list.length) {
+    throw new Fault(`type ${_repr(type.name)} was given no ${what}, and what DOORS gives then is not documented`);
+  }
+  return [...list];
+}
+
+function type_to_change(rt: any, type: any): number {
+  rt.need(type, "AttrType");
+  return rt.editing(type.module_id);
+}
+
+function type_named(rt: any, module_id: number, name: string): any {
+  return rt.store.types(module_id).find((t: any) => t.name === name) ?? null;
+}
+
+// `modify`, as documented, leaves errmess unused: a failure is a run-time error (see noError).
+function modify_type(rt: any, type: any, name: string, changes: any, maps: any[] | null, error: any): any {
+  const module_id = type_to_change(rt, type);
+  const now = type_named(rt, module_id, type.name);
+  rt.need(now, `type ${_repr(type.name)} (it has gone)`);
+  if (maps !== null && maps.some((v, i) => v !== undefined && v !== i)) {
+    throw new Fault("modify: only an identity mapping (arrMaps[i] = i) is supported here");
+  }
+  if (changes.values && rt.store.type_users(module_id, now.name).length) {
+    const same = changes.values.length === now.values.length
+      && changes.values.every((v: string, i: number) => v === now.values[i]);
+    if (!same && maps === null) {
+      throw new StoreError(`type ${_repr(now.name)} is in use: arrMaps must say where the old values go`);
+    }
+  }
+  rt.store.modify_type(module_id, now.name, { ...changes, name }, maps !== null);
+  error.set("");
+  return type_named(rt, module_id, name);
+}
+
+function register_type_changes(lib: any): void {
+  lib.add("modify", ["AttrType", "string", "&string"], "AttrType",
+    (rt: any, t: any, name: string, error: any) => modify_type(rt, t, name, {}, null, error));
+  for (const maps of [false, true]) {
+    lib.add("modify", ["AttrType", "string", "string[]", "int[]", "int[]", "string[]", ...(maps ? ["int[]"] : []),
+      "&string"], "AttrType", (rt: any, t: any, name: string, codes: any[], numbers: any[], colours: any[],
+      descriptions: any[], ...rest: any[]) => {
+      const error = rest.pop();
+      return modify_type(rt, t, name, { values: whole(codes, "names"), numbers: whole(numbers, "numbers"),
+        colours: whole(colours, "colours"), descriptions: whole(descriptions, "descriptions"),
+        real_colours: real_colours(rt) }, maps ? rt_array(rest[0]) : null, error);
+    });
+  }
+  lib.add("modify", ["AttrType", "AttrBaseType", "&string"], "AttrType",
+    (rt: any, t: any, base: string, error: any) => {
+      const module_id = type_to_change(rt, t);
+      rt.store.modify_type(module_id, t.name, { base });
+      error.set("");
+      return type_named(rt, module_id, t.name);
+    });
+  lib.add("delete", ["AttrType", "&string"], "bool", (rt: any, t: any, error: any) => {
+    const module_id = type_to_change(rt, t);
+    const message = attempt(() => rt.store.delete_type(module_id, t.name));
+    error.set(message);
+    return !message;
+  });
+  lib.add("setDescription", ["AttrType", "string", "&string"], "AttrType",
+    (rt: any, t: any, text: string, error: any) => {
+      const module_id = type_to_change(rt, t);
+      const message = attempt(() => rt.store.modify_type(module_id, t.name, { description: text }));
+      error.set(message);
+      return message ? null : type_named(rt, module_id, t.name);
+    });
+  lib.add("isRanged", ["AttrType"], "bool",
+    (rt: any, t: any) => ["Integer", "Real", "Date"].includes(rt.need(t, "AttrType").base));
+  lib.add("isUsed", ["AttrType"], "bool",
+    (rt: any, t: any) => rt.store.type_users(rt.need(t, "AttrType").module_id, t.name).length > 0);
+  for (const spelling of ["Color", "Colour"]) {
+    lib.add(`getReal${spelling}OptionForTypes`, [], "bool", real_colours);
+    lib.add(`setReal${spelling}OptionForTypes`, ["bool"], "void",
+      (rt: any, real: boolean) => { rt.state.set("real colours", real); });
+  }
+}
+
+function rt_array(array: any[]): any[] {
+  rt_need(array, "arrMaps");
+  return [...array];
 }
 
 export function value_type(rt: any, module_id: any, name: string): string {
@@ -159,7 +338,18 @@ export function register_attributes(lib: any): void {
   const need_def = (read: (rt: any, d: any) => any) =>
     (rt: any, d: any) => read(rt, rt.need(d, "AttrDef"));
 
+  // a handle shows the definition as it is now
+  const current = (rt: any, d: any) => rt.store.attribute(d.module_id, d.name) ?? d;
+  const live_def = (read: (rt: any, d: any) => any) =>
+    (rt: any, d: any) => read(rt, current(rt, rt.need(d, "AttrDef")));
+
   const def_props: [string, string, (rt: any, d: any) => any][] = [
+    ["description", "string", (rt, d) => d.description],
+    ["hidden", "bool", (rt, d) => d.hidden],
+    ["inherit", "bool", (rt, d) => d.inherit],
+    ["nobars", "bool", (rt, d) => !d.bars],
+    ["nochanges", "bool", (rt, d) => !d.dates],
+    ["nohistory", "bool", (rt, d) => !d.history],
     ["name", "string", (rt, d) => d.name],
     ["typeName", "string", (rt, d) => d.type_name],
     ["type", "AttrType", (rt, d) => find_type(rt, d.module_id, d.type_name)],
@@ -169,7 +359,7 @@ export function register_attributes(lib: any): void {
     ["system", "bool", (rt, d) => SYSTEM_NAMES.has(d.name)],
     ["defval", "string", (rt, d) => d.default]];
   for (const [name, returns, read] of def_props) {
-    lib.prop("AttrDef", name, returns, need_def(read));
+    lib.prop("AttrDef", name, returns, live_def(read));
   }
   // `ad.dxl` is the code where a string is wanted, and whether there is any in a condition
   lib.prop("AttrDef", "dxl", "bool", need_def((rt, d) => d.dxl !== ""));
@@ -180,17 +370,52 @@ export function register_attributes(lib: any): void {
     ["type", "AttrBaseType", (t) => t.base],
     ["size", "int", (t) => t.values.length],
     ["strings", "string[]", (t) => [...t.values]],
-    ["system", "bool", (t) => SYSTEM_TYPES.includes(t.name)]];
+    ["system", "bool", (t) => SYSTEM_TYPES.includes(t.name)],
+    ["description", "string", (t) => t.description],
+    ["values", "int[]", (t) => related(t, t.numbers, "related numbers")],
+    ["minValue", "bool", (t) => t.min !== ""],
+    ["maxValue", "bool", (t) => t.max !== ""]];
+  const live_type = (name: string, read: (rt: any, t: any) => any) => (rt: any, handle: any) => {
+    rt.need(handle, "AttrType");
+    if (handle.name === "Created Thru" && (name === "size" || name === "strings")) {
+      throw new Fault('the values of the "Created Thru" type are not available here');
+    }
+    return read(rt, rt.store.types(handle.module_id).find((t: any) => t.name === handle.name) ?? handle);
+  };
   for (const [name, returns, read] of type_props) {
-    lib.prop("AttrType", name, returns, (rt: any, t: any) => {
-      rt.need(t, "AttrType");
-      if (t.name === "Created Thru" && (name === "size" || name === "strings")) {
-        throw new Fault('the values of the "Created Thru" type are not available here');
+    lib.prop("AttrType", name, returns, live_type(name, (rt, t) => read(t)));
+  }
+  for (const name of ["colors", "colours"]) {
+    lib.prop("AttrType", name, "int[]", live_type(name, (rt, t) => {
+      if (t.colours.length && t.real_colours !== real_colours(rt)) {
+        throw new Fault(`${name}: the colours were set with setRealColorOptionForTypes(${t.real_colours}); `
+          + "converting between logical and real colours is not supported here");
       }
-      return read(t);
+      return related(t, t.colours, "colours");
+    }));
+  }
+  // a type's minimum or maximum, read as a number; `if (at.minValue)` asks whether it has one
+  for (const [name, field] of [["minValue", "min"], ["maxValue", "max"]]) {
+    lib.second_readings.set(key("AttrType", name), ["int", live_type(name, (rt, t) => {
+      if (t.base !== "Integer" || t[field] === "") {
+        throw new Fault(`${name}: only the limit of an Integer type that has one can be read here`);
+      }
+      return Number(t[field]);
+    })]);
+  }
+  // `at.description[n]` would be a value's description, which the manual does not settle how to index
+  lib.second_readings.set(key("AttrType", "description"), ["string[]", live_type("description", () => {
+    throw new Fault("the descriptions of an enumeration's values cannot be read here");
+  })]);
+
+  for (const owner of ["AttrDef", "AttrType"]) {
+    lib.prop(owner, "canWrite", "bool", (rt: any, handle: any) => {
+      rt.need(handle, owner);
+      const system = owner === "AttrDef" ? SYSTEM_NAMES : new Set(SYSTEM_TYPES);
+      return !system.has(handle.name) && rt.opened.get(handle.module_id) !== "read"
+        && !rt.store.is_baseline(handle.module_id);
     });
   }
-
   lib.add("find", ["Module", "string"], "AttrDef", find_definition);
   lib.add("find", ["Module", "string"], "AttrType", find_type);
   lib.add("attributeValue", ["AttrDef", "string"], "bool", valid_value);
@@ -206,8 +431,11 @@ export function register_attributes(lib: any): void {
   // `create object type "Integer" (default "0") attribute "Cost"`: the
   // properties merge from right to left into one specification.
   lib.add("attribute", ["string"], "AttrName_", (rt: any, name: string) => new Map([["name", name]]));
-  for (const [prop, takes] of [["type", "string"], ["default", "string"], ["multi", "bool"]]) {
-    lib.add(prop, [takes], "AttrProp_", (rt: any, value: any) => new Map([[prop, value]]));
+  for (const [prop, takes, field] of [["type", "string", "type"], ["default", "string", "default"],
+    ["multi", "bool", "multi"], ["description", "string", "description"], ["inherit", "bool", "inherit"],
+    ["hidden", "bool", "hidden"], ["history", "bool", "history"], ["changeBars", "bool", "bars"],
+    ["date", "bool", "dates"]]) {
+    lib.add(prop, [takes], "AttrProp_", (rt: any, value: any) => new Map([[field, value]]));
   }
   const merge = (rt: any, a: Map<string, any>, b: Map<string, any>) => new Map([...a, ...b]);
   for (const right of ["AttrProp_", "AttrName_"]) {
@@ -225,13 +453,6 @@ export function register_attributes(lib: any): void {
   lib.juxta("AttrName_", "AttrDXL_", "AttrNameDXL_", merge);
   lib.juxta("AttrProp_", "AttrNameDXL_", "AttrNameDXL_", merge);
   lib.add("create", ["AttrNameDXL_"], "AttrDef", create_definition);
-  // nothing here is inherited or hidden, so only `false` can be honoured
-  for (const prop of ["inherit", "hidden"]) {
-    lib.add(prop, ["bool"], "AttrProp_", (rt: any, value: boolean) => {
-      if (value) throw new Fault(`${prop} true is not supported here`);
-      return new Map();
-    });
-  }
   for (const scope of ["object", "module"]) {
     lib.add(scope, ["AttrName_"], "AttrName_",
       (rt: any, spec: Map<string, any>) => new Map([...spec, ["scope", scope]]));
@@ -243,6 +464,21 @@ export function register_attributes(lib: any): void {
     (rt: any, d: any) => delete_definition(rt, current_module(rt), d));
   lib.add("delete", ["Module", "AttrDef"], "string", delete_definition);
 
+  lib.add("modify", ["AttrDef", "AttrName_"], "AttrDef", redefine);
+  lib.add("modify", ["AttrDef", "AttrNameDXL_"], "AttrDef", redefine);
+  for (const [constant, takes, change] of SETTERS) {
+    const type_name = `Set_${constant}`;
+    lib.type(type_name);
+    lib.add(constant, [], type_name, () => constant);
+    lib.add("modify", ["AttrDef", type_name, takes], "AttrDef",
+      (rt: any, d: any, which: any, value: any) => modified(rt, d, change(rt.need(d, "AttrDef"), value)));
+  }
+  lib.add("hasSpecificValue", ["Object", "AttrDef"], "bool", own_value);
+  lib.add("isVisibleAttribute", ["AttrDef"], "bool", (rt: any, d: any) => {
+    rt.need(d, "AttrDef");
+    return d.scope === "object" && !d.hidden;
+  });
+
   // attribute types
   for (const [constant, base] of BASE_CONSTANTS) {
     lib.add(constant, [], "AttrBaseType", (rt: any) => base);
@@ -251,14 +487,36 @@ export function register_attributes(lib: any): void {
   lib.add("print", ["AttrBaseType"], "void", (rt: any, base: string) => { rt.out.write(base); });
   lib.add("create", ["string", "AttrBaseType", "&string"], "AttrType",
     (rt: any, name: string, base: string, error: any) => create_type(rt, name, base, [], error));
-  // names [, values [, colours [, descriptions]]]; only the names are kept.
-  const extras: string[] = [];
-  for (const extra of [null, "int[]", "int[]", "string[]"]) {
-    if (extra) extras.push(extra);
-    lib.add("create", ["string", "string[]", ...extras, "&string"], "AttrType",
-      (rt: any, name: string, codes: string[], ...rest: any[]) =>
-        create_type(rt, name, "Enumeration", codes, rest[rest.length - 1]));
+  // names [, values [, colours] [, descriptions]]
+  for (const [params, fields] of [
+    [[], []],
+    [["int[]"], ["numbers"]],
+    [["int[]", "int[]"], ["numbers", "colours"]],
+    [["int[]", "string[]"], ["numbers", "descriptions"]],
+    [["int[]", "int[]", "string[]"], ["numbers", "colours", "descriptions"]]] as [string[], string[]][]) {
+    lib.add("create", ["string", "string[]", ...params, "&string"], "AttrType",
+      (rt: any, name: string, codes: string[], ...rest: any[]) => {
+        const error = rest.pop();
+        const given = Object.fromEntries(fields.map((f, i) => [f, whole(rest[i], f)]));
+        return create_type(rt, name, "Enumeration", whole(codes, "names"), error,
+          { ...given, real_colours: fields.includes("colours") && real_colours(rt) });
+      });
   }
+  for (const [number, base] of [["int", "Integer"], ["real", "Real"]]) {
+    lib.add("create", ["string", number, number, "&string"], "AttrType",
+      (rt: any, name: string, min: number, max: number, error: any) =>
+        create_type(rt, name, base, [], error, { min: String(min), max: String(max) }));
+    for (const [call, field] of [["setMinValue", "min"], ["setMaxValue", "max"]]) {
+      lib.add(call, ["AttrType", number, "bool"], "bool", (rt: any, t: any, value: number, applies: boolean) => {
+        const module_id = type_to_change(rt, t);
+        const now = rt.store.types(module_id).find((x: any) => x.name === t.name);
+        if (now.base !== base) throw new Fault(`${call}: ${_repr(t.name)} is not a ${base} type`);
+        if (!applies) return true; // as documented: the limit given is ignored
+        return !attempt(() => rt.store.modify_type(module_id, t.name, { [field]: String(value) }));
+      });
+    }
+  }
+  register_type_changes(lib);
 
   lib.add("type", ["attr"], "string", attribute_type_name);
   lib.add("type", ["Module", "string"], "string", value_type);

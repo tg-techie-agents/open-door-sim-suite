@@ -42,6 +42,10 @@ const S = {
   columns: [], inLinks: true, outLinks: true, filter: null, sort: null, quick: "", view: "", dxlColumn: null,
   layout: null, layoutCells: [], // a view made by a script: every column in its order
   linkStart: null, props: false,
+  readOnly: false, filterOn: true, advanced: null, sortOn: true, sortDescending: false,
+  outlining: true, maxLevel: 0, collapsed: new Set(), outline: false, outlineClosed: new Set(), outlineFiltered: false,
+  arrows: true, changeBars: true, changes: new Map(), redline: null, redlineCells: new Map(), column: null,
+  find: { text: "", with: "", matchCase: false }, clip: null, undo: [],
 };
 
 const OPERATORS = [["contains", "contains"], ["!contains", "does not contain"], ["==", "equals"],
@@ -275,13 +279,16 @@ const undeleteItem = () => act(async () => {
 
 function resetView() {
   Object.assign(S, { columns: [], inLinks: true, outLinks: true, filter: null, sort: null, quick: "", view: "", dxlColumn: null,
-    layout: null, layoutCells: [] });
+    layout: null, layoutCells: [], filterOn: true, advanced: null, sortOn: true, sortDescending: false, column: null,
+    maxLevel: 0, collapsed: new Set(), outlineClosed: new Set() });
   TRACE.reset();
 }
 
 function clearFilters() {
   S.quick = "";
   S.filter = null;
+  S.advanced = null;
+  S.filterOn = true;
   TRACE.clear();
 }
 
@@ -294,12 +301,17 @@ async function readModule(id) {
 
 async function openModule(id, absno) {
   const data = await readModule(id);
-  if (S.moduleId !== id) resetView();
+  if (S.moduleId !== id) {
+    resetView();
+    S.readOnly = false;
+    S.redline = null;
+  }
   S.moduleId = id;
   S.data = data;
   S.selected = data.rows.some((r) => r.absno === absno) ? absno : (data.rows[0] || {}).absno ?? null;
   await computeLayoutCells();
   await TRACE.load();
+  await loadChanges();
   render();
   $("main").scrollTop = 0;
   if (absno !== undefined) scrollToSelected();
@@ -314,6 +326,7 @@ async function refresh(options) {
   if (S.dxlColumn) await computeDxlColumn();
   await computeLayoutCells();
   await TRACE.load();
+  await loadChanges();
   render(options);
   if (options && options.keepProps) showCalculated();
   [$("main").scrollTop, $("main").scrollLeft] = scroll;
@@ -333,6 +346,7 @@ async function goTo(module, absno) {
   } else {
     await openModule(module, absno);
   }
+  reveal(absno);
   renderTree();
 }
 
@@ -347,7 +361,8 @@ function scrollToSelected() {
 
 const selectedRow = () => S.data && S.data.rows.find((r) => r.absno === S.selected);
 const attribute = (name) => S.data.attributes.find((a) => a.name === name && a.scope === "object");
-const writable = () => S.data && !S.data.module.baseline;
+const current = () => !!S.data && !S.data.module.baseline; // not a baseline
+const writable = () => current() && !S.readOnly;
 
 function cellText(row, name) {
   if (name === "ID") return row.id;
@@ -356,7 +371,8 @@ function cellText(row, name) {
 }
 
 function passes(row) {
-  if (!TRACE.passes(row)) return false;
+  if (!S.filterOn) return true;
+  if (!TRACE.passes(row) || !advancedPasses(row)) return false;
   if (S.quick) {
     const all = [row.id, row.number, ...Object.values(row.values)].join("\n").toLowerCase();
     if (!all.includes(S.quick.toLowerCase())) return false;
@@ -376,8 +392,8 @@ function passes(row) {
 }
 
 function visibleRows() {
-  const rows = S.data.rows.filter(passes);
-  if (!S.sort) return rows;
+  const rows = outlineRows(S.data.rows.filter(passes));
+  if (!S.sort || !S.sortOn) return rows;
   const definition = attribute(S.sort);
   const key = (row) => {
     const text = cellText(row, S.sort);
@@ -388,13 +404,14 @@ function visibleRows() {
   };
   return rows.sort((a, b) => {
     const x = key(a), y = key(b);
-    return x < y ? -1 : x > y ? 1 : 0;
+    return (x < y ? -1 : x > y ? 1 : 0) * (S.sortDescending ? -1 : 1);
   });
 }
 
 function render(options) {
   renderToolbar();
   renderMain();
+  renderOutline();
   if (!(options && options.keepProps)) renderProps();
   renderDxlContext();
   document.title = (S.data ? S.data.module.name + " - " : "") + "OpenDoor";
@@ -527,8 +544,11 @@ function renderMain() {
     main.classList.remove("windowed");
     const node = pickedItem();
     $("counts").textContent = "";
-    if (node.deleted) return main.replaceChildren(h("div", { class: "empty" }, node.path + " is deleted. Use File, Undelete item."));
-    if (node.kind === "link") return main.replaceChildren(h("div", { class: "empty" }, node.path + " is a link module. Its links show in the link columns of formal modules."));
+    if (node.deleted) return main.replaceChildren(h("div", { class: "empty" }, node.path + " is deleted. Use File, Database item, Undelete item."));
+    if (node.kind === "link") {
+      main.replaceChildren(h("div", { class: "empty" }, "Reading the links of " + node.path + "..."));
+      return showLinkModule(node).catch((e) => say(e.message, true)); // leaves the status message be
+    }
     return main.replaceChildren(h("div", { class: "empty" },
       h("h3", {}, node.path),
       node.children.length ? listTable(["Name", "Type", "Description"], node.children.map((c) =>
@@ -540,14 +560,20 @@ function renderMain() {
   const rows = visibleRows();
   // the ID column is always first, so a view that also names it does not show it twice
   const attributeColumns = S.columns.filter((c) => c !== "ID" && (attribute(c) || S.data.system_attributes.includes(c) || c === "Absolute Number"));
-  const extra = TRACE.columns();
+  const extra = extraColumns();
+  // a column heading, with its menu; `index` is its place in the view, null if it is not part of the view
+  const heading = (title, index, sortName, width) => {
+    const menu = (e) => columnMenu(e, index, sortName);
+    return h("th", { onclick: menu, oncontextmenu: menu, class: index !== null && index === S.column ? "picked" : "",
+      ...(width ? { style: `width:${width}px;min-width:${width}px` } : {}) }, title);
+  };
   const head = h("tr", {},
-    S.layout ? S.layout.map((c) => h("th", c.width ? { style: `width:${c.width}px;min-width:${c.width}px` } : {},
-      c.title ?? ({ id: "ID", main: m.name, attribute: c.attribute, dxl: "DXL" }[c.kind] || "")))
-      : [h("th", {}, "ID"), h("th", {}, m.name), attributeColumns.map((c) => h("th", {}, c))],
-    S.outLinks ? h("th", {}, "Out-links") : null, S.inLinks ? h("th", {}, "In-links") : null,
-    S.dxlColumn ? h("th", {}, S.dxlColumn.title) : null,
-    extra.map((c) => h("th", {}, c.title)));
+    S.layout ? S.layout.map((c, i) => heading(c.title ?? ({ id: "ID", main: m.name, attribute: c.attribute, dxl: "DXL" }[c.kind] || ""),
+      i, c.kind === "id" ? "ID" : c.kind === "attribute" ? c.attribute : null, c.width))
+      : [heading("ID", 0, "ID"), heading(m.name, 1, null), attributeColumns.map((c, i) => heading(c, i + 2, c))],
+    S.outLinks ? heading("Out-links", null, null) : null, S.inLinks ? heading("In-links", null, null) : null,
+    S.dxlColumn ? heading(S.dxlColumn.title, null, null) : null,
+    extra.map((c) => heading(c.title, null, null)));
   const body = h("tbody", {});
   const scrolled = main.scrollTop;
   const shape = `${S.moduleId}\n${head.textContent}`;
@@ -568,18 +594,29 @@ function renderMain() {
     S.data.rows.length ? null : h("div", { class: "empty" }, "This module has no objects. Use Insert, Object (or the New object button)."),
     S.data.rows.length && !rows.length ? h("div", { class: "empty" }, "No object matches the filter.") : null,
   ].filter(Boolean));
-  const parts = [`${rows.length} of ${S.data.rows.length} objects`];
-  if (S.filter) parts.push("filter on");
-  parts.push(...TRACE.status());
+  const parts = [m.baseline ? "baseline" : S.readOnly ? "read-only" : "exclusive edit",
+    `${rows.length} of ${S.data.rows.length} objects`];
+  if (S.filterOn) {
+    if (S.filter) parts.push("filter on");
+    if (S.advanced) parts.push("advanced filter on");
+    parts.push(...TRACE.status());
+  } else parts.push("filtering off");
+  if (S.maxLevel) parts.push("levels 1 to " + S.maxLevel);
   if (windowed) {
     // the same place in the list as before the redraw, then true heights
     main.scrollTop = scrolled;
     measureRows();
     drawRows(main.scrollTop);
   }
-  if (S.sort) parts.push("sorted by " + S.sort);
+  if (S.sort) parts.push(!S.sortOn ? "sorting off" : "sorted by " + S.sort + (S.sortDescending ? ", descending" : ""));
   if (S.linkStart) parts.push("link start: " + S.linkStart.id);
-  $("counts").textContent = parts.join(" | ");
+  S.statusParts = parts;
+  showStatus();
+}
+
+function showStatus() {
+  const row = selectedRow();
+  $("counts").textContent = [row ? `${row.id} (${row.number})` : null, ...(S.statusParts || [])].filter(Boolean).join(" | ");
 }
 
 function renderRow(row, attributeColumns, extra) {
@@ -592,17 +629,24 @@ function renderRow(row, attributeColumns, extra) {
     ondblclick: editable ? (e) => { e.stopPropagation(); editCell(row, name, e.currentTarget); } : null,
   }, content);
 
+  const arrow = (direction, mark, list) => (list.length && S.arrows ? h("button", { type: "button", class: "mark " + direction,
+    title: `${list.length} ${direction}-link(s)`, onclick: (e) => arrowMenu(e, row, direction),
+    oncontextmenu: (e) => arrowMenu(e, row, direction) }, mark) : null);
+  const starts = S.linkStart && S.linkStart.module === S.moduleId && S.linkStart.absno === row.absno;
   const main = h("td", {
-    class: "main",
+    class: "main" + (S.changes.has(row.absno) ? " changed" : ""),
+    title: changeTitle(row) || undefined,
     "data-level": Math.min(row.level, 6),
     ondblclick: editable ? (e) => editCell(row, heading && !text ? "Object Heading" : "Object Text",
       e.currentTarget.querySelector(heading && !text ? ".heading" : ".text")) : null,
   },
-  row.in.length ? h("span", { class: "mark in", title: `${row.in.length} in-link(s)` }, "◀") : null,
-  row.out.length ? h("span", { class: "mark out", title: `${row.out.length} out-link(s)` }, "▶") : null,
+  arrow("in", "◀", row.in),
+  arrow("out", "▶", row.out),
+  starts ? h("span", { class: "mark start", title: "A link starts here" }, "◆") : null,
   isSuspectRow(row) ? h("span", { class: "mark suspect", title: "Suspect link" }, "S") : null,
-  h("div", { style: `padding-left:${(row.level - 1) * 16}px` },
-    h("span", { class: "number" }, row.number),
+  h("div", { style: `padding-left:${S.outlining ? (row.level - 1) * 16 : 0}px` },
+    S.outlining ? h("span", { class: "number" }, row.number) : null,
+    S.collapsed.has(row.absno) ? h("span", { class: "collapsed", title: "Collapsed: objects below are hidden" }, "[+] ") : null,
     heading ? part("Object Heading", "heading", heading) : null,
     !heading && !text && short ? part("Object Short Text", "short", short) : null,
     h("div", { class: "text" }, text)));
@@ -676,7 +720,7 @@ async function computeLayoutCells() {
   if (S.layout) {
     for (const [index, column] of S.layout.entries()) {
       if (column.kind !== "dxl") continue;
-      if (!writable()) {
+      if (!current()) {
         cells[index] = Object.fromEntries(S.data.rows.map((r) => [r.absno, "(DXL columns are not run on a baseline)"]));
         continue;
       }
@@ -716,6 +760,8 @@ function select(absno) {
     row.classList.toggle("picked", Number(row.dataset.absno) === absno);
   renderToolbar();
   renderProps();
+  showStatus();
+  markOutline();
 }
 
 // An input for one attribute value, and a way to read it back as stored text.
@@ -752,7 +798,7 @@ function editCell(row, name, holder) {
     if (!save || value === before) return holder.replaceChildren(...shown);
     act(async () => {
       try {
-        await api("set_values", { module: S.moduleId, absno: row.absno, values: { [name]: value } });
+        await setValue(S.moduleId, row.absno, name, before, value);
       } finally {
         await refresh();
       }
@@ -766,7 +812,10 @@ function editCell(row, name, holder) {
   });
   input.addEventListener("mousedown", (e) => e.stopPropagation());
   input.addEventListener("dblclick", (e) => e.stopPropagation());
-  holder.replaceChildren(input);
+  // pressing a button must not first take the focus away: that saves
+  const commit = (label, save) => h("button", { type: "button", onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); },
+    onclick: (e) => { e.stopPropagation(); finish(save); }, ondblclick: (e) => e.stopPropagation() }, label);
+  holder.replaceChildren(input, h("span", { class: "commit" }, commit("Accept", true), commit("Discard", false)));
   input.focus();
   say("Editing " + name + ". Ctrl+Enter or click away saves; Esc cancels.");
 }
@@ -801,19 +850,19 @@ function renderProps() {
         class: "calculated" + (row.failed.includes(a.name) ? " dxl-failed" : "") });
       return h("label", {}, `${a.name} (calculated by DXL)`, box);
     }
-    let current = row.values[a.name] || "";
-    const [input, read] = valueInput(a, current);
+    let held = row.values[a.name] || "";
+    const [input, read] = valueInput(a, held);
     input.disabled = !editable;
     input.addEventListener("change", () => act(async () => {
       const value = read();
-      if (value === current) return;
+      if (value === held) return;
       try {
-        await api("set_values", { module, absno, values: { [a.name]: value } });
+        await setValue(module, absno, a.name, held, value);
       } catch (e) {
         renderProps();  // show the stored value again
         throw e;
       }
-      current = value;
+      held = value;
       if (module === S.moduleId) await refresh({ keepProps: true });
       say("Saved " + a.name);
     }));
@@ -858,13 +907,13 @@ function showProps() {
 function needObject(editing) {
   const row = selectedRow();
   if (!row) throw new Error("Select an object first.");
-  if (editing && !writable()) throw new Error("A baseline is read only.");
+  if (editing && !writable()) throw new Error(can.write() + ".");
   return row;
 }
 
 const addObject = (where) => act(async () => {
   if (!S.data) throw new Error("Open a formal module first.");
-  if (!writable()) throw new Error("A baseline is read only.");
+  if (!writable()) throw new Error(can.write() + ".");
   const ref = where === "end" ? null : needObject(true).absno;
   const made = await api("add_object", { module: S.moduleId, ref, where });
   clearFilters();
@@ -883,14 +932,24 @@ const objectOperation = (operation, extra) => act(async () => {
   scrollToSelected();
 });
 
-const move = (direction) => objectOperation("move_object", { direction });
+const move = (direction) => act(async () => {
+  const row = needObject(true), module = S.moduleId, absno = row.absno;
+  await api("move_object", { module, absno, direction });
+  // up and down undo each other; promote and demote do not
+  const back = { up: "down", down: "up" }[direction];
+  if (back) remember(`move of ${row.id}`, () => api("move_object", { module, absno, direction: back }));
+  await refresh();
+  scrollToSelected();
+});
 const undeleteObject = () => objectOperation("undelete_object");
 
 const deleteObject = () => act(async () => {
   const row = needObject(true);
   if (row.deleted) throw new Error(`${row.id} is already deleted.`);
   confirmDialog("Delete object", `Delete ${row.id}? It can be undeleted (View, Deleted objects).`, "Delete", async () => {
-    await api("delete_object", { module: S.moduleId, absno: row.absno });
+    const module = S.moduleId;
+    await api("delete_object", { module, absno: row.absno });
+    remember(`deletion of ${row.id}`, () => api("undelete_object", { module, absno: row.absno }));
     await refresh();
   });
 });
@@ -967,9 +1026,7 @@ function toolButton(label, why, action, options) {
 function renderToolbar() {
   const bar = $("toolbar");
   const dxl = toolButton("DXL...", "", () => act(openDxl), { class: "dxl" });
-  if (!S.data) {
-    return bar.replaceChildren(dxl, h("span", { class: "hint" }, "For the other tools, open a formal module (blue M): pick it in the list below or in the tree."));
-  }
+  if (!S.data) return bar.replaceChildren(...explorerTools(), dxl);
   const quick = h("input", { type: "search", id: "quick", placeholder: "Filter text...", value: S.quick,
     "aria-label": "Filter text", oninput: (e) => { S.quick = e.target.value; renderMain(); } });
   const views = field({ type: "select", options: [["", "Standard view"], ...Object.keys(S.data.views)], value: S.view });
@@ -977,7 +1034,12 @@ function renderToolbar() {
   views.addEventListener("change", () => act(() => applyView(views.value)));
   const sort = field({ type: "select", options: [["", "Document order"], ...sortableNames().map((n) => [n, "Sort: " + n])], value: S.sort || "" });
   sort.setAttribute("aria-label", "Sort");
-  sort.addEventListener("change", () => { S.sort = sort.value || null; renderMain(); });
+  sort.addEventListener("change", () => { S.sort = sort.value || null; S.sortOn = true; renderMain(); });
+  const levels = field({ type: "select", options: [["0", "All levels"], ...[1, 2, 3, 4, 5, 6].map((n) => [String(n), "Level " + n])],
+    value: String(S.maxLevel) });
+  levels.setAttribute("aria-label", "Levels shown");
+  levels.className = "wide-only";
+  levels.addEventListener("change", () => setLevel(Number(levels.value)));
   const actions = toolButton("Object...", can.object(), (e) => {
     const box = e.currentTarget.getBoundingClientRect();
     showMenu(objectMenu(), box.left, box.bottom);
@@ -990,10 +1052,36 @@ function renderToolbar() {
       toolButton(label, can.move(direction), () => move(direction), { title, class: "wide-only" })),
     actions,
     toolButton("Properties", "", () => { S.props = !S.props; renderProps(); }),
+    toolButton("Delete", can.remove(), deleteObject, { class: "wide-only", title: "Delete object" }),
+    toolButton("Find", "", () => act(() => openFind(false)), { class: "wide-only" }),
+    toolButton("Explorer", "", toggleOutline, { class: S.outline ? "on" : "", title: "Module Explorer" }),
+    levels,
     h("span", { class: "gap wide-only" }), h("span", { class: "wide-only" }, "View"), views, sort, quick,
     toolButton("Filter...", "", () => act(filterDialog)),
-    toolButton("Clear", "", () => { clearFilters(); S.sort = null; render(); }),
+    toolButton(S.filterOn ? "Filtering on" : "Filtering off", "", () => { S.filterOn = !S.filterOn; render(); }, { class: "wide-only" }),
+    toolButton("Clear", "", () => { clearFilters(); S.sort = null; S.sortDescending = false; render(); }),
     h("span", { class: "gap wide-only" }), dxl);
+}
+
+// The toolbar of the database explorer: when no formal module is open.
+function explorerTools() {
+  const node = S.tree ? pickedItem() : null;
+  if (!node) return [];
+  const newWhy = containerForNew().deleted ? "that folder is deleted" : "";
+  const own = node.id === 1 ? "pick an item in the tree" : node.deleted ? "the item is deleted" : "";
+  const press = (work) => () => act(async () => work());
+  return [
+    toolButton("Up", node.parent ? "" : "already at the top", press(upLevel), { title: "Up one level" }),
+    toolButton("New folder", newWhy, press(() => newItem("folder", "folder"))),
+    toolButton("New project", newWhy, press(() => newItem("project", "project"))),
+    toolButton("New module", newWhy, press(() => newItem("formal", "formal module")), { title: "New formal module" }),
+    toolButton("New link module", newWhy, press(() => newItem("link", "link module")), { class: "wide-only" }),
+    toolButton("Open...", "", press(openDialog)),
+    toolButton("Delete", own, press(deleteItem), { class: "wide-only" }),
+    toolButton("Add favourite", node.id === 1 ? "pick an item in the tree" : "", press(addFavourite), { class: "wide-only" }),
+    toolButton("Search", "", press(searchDialog)),
+    toolButton("Users", FEATURES.users[3], () => {}, { class: "wide-only" }),
+  ];
 }
 
 async function applyView(name) {
@@ -1025,7 +1113,10 @@ const NO_MODULE = "open a formal module first";
 const BASELINE = "a baseline is read only";
 const can = {
   module: () => S.data ? "" : NO_MODULE,
-  write: () => !S.data ? NO_MODULE : writable() ? "" : BASELINE,
+  current: () => !S.data ? NO_MODULE : current() ? "" : BASELINE,
+  write: () => !S.data ? NO_MODULE : writable() ? "" : current() ? "the module is open read-only" : BASELINE,
+  column: () => !S.data ? NO_MODULE : S.column === null ? "click a column heading first" : "",
+  paste: () => can.write() || (S.clip ? "" : "cut or copy an object first"),
   object: () => !S.data ? NO_MODULE : selectedRow() ? "" : "select an object first",
   change: () => can.object() || can.write() || (selectedRow().deleted ? "the object is deleted" : ""),
   move: (direction) => {
@@ -1043,7 +1134,7 @@ const can = {
     || (S.data.rows.some((r) => r.parent === S.selected && !r.deleted) ? "delete its children first" : ""),
   undelete: () => can.object() || can.write() || (selectedRow().deleted ? "" : "not deleted (see View, Deleted objects)"),
   compare: () => can.module() || (S.data.baselines.length ? "" : "no baselines yet"),
-  baseline: () => !S.data ? NO_MODULE : writable() ? "" : "open the current version first",
+  baseline: () => !S.data ? NO_MODULE : current() ? "" : "open the current version first",
   savedView: () => can.write() || (S.view ? "" : "choose a saved view first"),
   linkEnd: () => can.change() || (S.linkStart ? "" : "use Start link first"),
 };
@@ -1095,7 +1186,7 @@ async function computeDxlColumn() {
 
 async function dxlColumnDialog() {
   needModule();
-  if (!writable()) throw new Error("DXL columns work on the current version, not a baseline.");
+  if (!current()) throw new Error("DXL columns work on the current version, not a baseline.");
   const scripts = await api("scripts");
   const source = h("textarea", { class: "layout", wrap: "off", "aria-label": "Layout DXL",
     value: stored("dxl-column") ?? "display(identifier(obj))\n" });
@@ -1159,13 +1250,15 @@ function filterDialog() {
 
 function saveViewDialog() {
   const m = needModule();
-  if (!writable()) throw new Error("A baseline is read only.");
+  if (!writable()) throw new Error(can.write() + ".");
   formDialog("Save view", [{ name: "name", label: "View name", value: S.view }], "Save", async ({ name }) => {
     await api("save_view", { module: m.id, name, definition: {
       ...(S.layout ? { layout: S.layout } : { columns: S.columns }),
-      filter: S.filter, sort: S.sort, in_links: S.inLinks, out_links: S.outLinks, ...TRACE.definition() } });
+      filter: S.filter, sort: S.sortDescending ? null : S.sort, in_links: S.inLinks, out_links: S.outLinks, ...TRACE.definition() } });
     S.view = name;
     await refresh();
+    const left = [S.sort && S.sortDescending ? "the descending sort" : "", S.advanced ? "the advanced filter" : ""].filter(Boolean);
+    if (left.length) say(`Saved view "${name}", without ${left.join(" and ")}: views do not keep that here.`);
   });
 }
 
@@ -1201,7 +1294,8 @@ function attributesDialog() {
         h("td", {}, a.name), h("td", {}, a.type + (a.type === a.base ? "" : ` (${a.base}${a.multi ? ", multi-valued" : ""})`)),
         h("td", {}, a.scope), h("td", {}, a.values.join(", ")), h("td", {}, a.default), h("td", {}, value),
         h("td", { class: "code" }, a.dxl),
-        h("td", {}, !editable || standard ? null : h("button", { onclick: () => confirmDialog("Delete attribute",
+        h("td", {}, !editable || standard ? null : [h("button", { onclick: () => act(() => attributeEditDialog(a, draw)) }, "Edit"), " "],
+          !editable || standard ? null : h("button", { onclick: () => confirmDialog("Delete attribute",
           `Delete "${a.name}" and every value it holds in this module?`, "Delete", async () => {
             await api("delete_attribute", { module: m.id, name: a.name });
             await refresh();
@@ -1233,6 +1327,9 @@ function newAttributeDialog(after) {
   const type = field({ type: "select", options: [...S.data.types.map((t) => [t.name, t.name]), [NEW, "New enumeration type..."]], value: "String" });
   const typeName = field({}), values = field({ type: "textarea" });
   const multi = field({ type: "checkbox" }), initial = field({});
+  const description = field({});
+  const inherit = field({ type: "checkbox" }), history = field({ type: "checkbox", value: true });
+  const bars = field({ type: "checkbox", value: true }), dates = field({ type: "checkbox", value: true });
   const dxl = h("textarea", { class: "code", wrap: "off", spellcheck: false, "aria-label": "Attribute DXL",
     placeholder: "obj.attrDXLName = identifier(obj)" });
   const extra = [h("label", {}, "New type name"), typeName, h("label", {}, "Values, one per line"), values];
@@ -1242,11 +1339,15 @@ function newAttributeDialog(after) {
   dialog("New attribute", h("div", { class: "form" },
     h("label", {}, "Name"), name, h("label", {}, "Type"), type, ...extra,
     h("label", {}, "Scope"), scope, h("label", {}, "Multi-valued"), multi, h("label", {}, "Default"), initial,
+    h("label", {}, "Description"), description, h("label", {}, "Inherit from the parent object"), inherit,
+    h("label", {}, "Record edits in history"), history, h("label", {}, "Edits show change bars"), bars,
+    h("label", {}, "Edits update Last Modified"), dates,
     h("label", {}, "Attribute DXL (optional)"), h("div", {}, dxl,
       h("div", { class: "meta" }, "Calculates the value of each object. Object scope, single value, no default."))), [
     { label: "Create", primary: true, action: async () => {
       const args = { module: m.id, name: name.value, type: type.value, scope: scope.value, multi: multi.checked, default: initial.value,
-        dxl: dxl.value.trim() ? dxl.value : "" };
+        dxl: dxl.value.trim() ? dxl.value : "",
+        extras: { description: description.value, inherit: inherit.checked, history: history.checked, bars: bars.checked, dates: dates.checked } };
       if (type.value === NEW) {
         args.type = typeName.value.trim();
         if (!args.type) throw new Error("Name the new type.");
@@ -1264,7 +1365,7 @@ function newAttributeDialog(after) {
 
 function newBaselineDialog() {
   const m = needModule();
-  if (!writable()) throw new Error("Open the current version to baseline it.");
+  if (!current()) throw new Error("Open the current version to baseline it.");
   formDialog("New baseline of " + m.name, [
     { name: "major", label: "Major version", type: "checkbox" },
     { name: "suffix", label: "Suffix (optional)" },
@@ -1365,7 +1466,7 @@ const exportCsv = () => act(async () => {
 
 const importCsv = () => act(async () => {
   const m = needModule();
-  if (!writable()) throw new Error("A baseline is read only.");
+  if (!writable()) throw new Error(can.write() + ".");
   chooseFile(".csv,text/csv", async (file) => {
     const text = await readUtf8(file);
     confirmDialog("Import CSV", `Import ${file.name} into ${m.path}?`, "Import", async () => {
@@ -1550,7 +1651,7 @@ function renderDxlContext() {
   const m = S.data && S.data.module;
   DXL.context.textContent = !m ? "No current module. Open a formal module to make it current."
     : m.baseline ? "A baseline is open, so the script runs with no current module."
-      : "Current module: " + m.path;
+      : "Current module: " + m.path + (S.readOnly ? " (open read-only: database changes are undone after the run)" : "");
 }
 
 function goToLine(line) {
@@ -1568,8 +1669,8 @@ async function runDxl() {
   const shownView = S.view, shownAs = JSON.stringify(S.data?.views[S.view]);
   $("dxl").classList.add("ran");
   try {
-    const module = S.data && !S.data.module.baseline ? S.moduleId : null;
-    const dry = DXL.dry.checked;
+    const module = current() ? S.moduleId : null;
+    const dry = DXL.dry.checked || (S.readOnly && module !== null);
     const reply = await api("run_dxl", { source: DXL.source.value, module, view: module === null ? null : S.view || null,
       dry_run: dry, confirm_yes: DXL.yes.checked });
     const parts = [reply.output ? h("div", {}, reply.output) : null];
@@ -1582,7 +1683,9 @@ async function runDxl() {
       parts.push(h("div", { class: "note" }, reply.dialogs?.open
         ? "Dialog box open: its callbacks run when you use it." : "Script finished."));
     }
-    if (reply.rolled_back) parts.push(h("div", { class: "note" }, "Try without saving: database changes were undone. Files written by the script remain."));
+    if (reply.rolled_back) parts.push(h("div", { class: "note" }, DXL.dry.checked
+      ? "Try without saving: database changes were undone. Files written by the script remain."
+      : "The module is open read-only: database changes were undone (DOORS would refuse them). Files written remain."));
     else if (reply.unsaved.length) parts.push(h("div", { class: "note" }, "Changed without save(). Kept here, but real DOORS would not keep these unless the script saves: " + reply.unsaved.join(", ")));
     // What the script wrote goes first, above however much it printed.
     const files = reply.files || [];
@@ -1602,7 +1705,7 @@ async function runDxl() {
     DXL.run.disabled = false;
   }
   await loadTree();
-  if (S.moduleId !== null && !S.items.has(S.moduleId) && !(S.data && S.data.module.baseline)) S.moduleId = S.data = S.selected = null;
+  if (S.moduleId !== null && !S.items.has(S.moduleId) && current()) S.moduleId = S.data = S.selected = null;
   await refresh();
   // the script saved over, or deleted, the view on screen
   if (shownView && S.view === shownView && S.data && JSON.stringify(S.data.views[shownView]) !== shownAs) {
@@ -1617,110 +1720,39 @@ function closeMenus() {
   document.querySelectorAll("#menubar .open").forEach((b) => b.classList.remove("open"));
 }
 
-// entries: [label, action, key hint, why it cannot be done now] or null for a separator.
-function showMenu(entries, x, y) {
+// entries: [label, action, key hint, why it cannot be done now, feature id], or
+// null for a separator. An action that is a list of entries is a submenu. The
+// entries themselves are in menus.js.
+function showMenu(entries, x, y, back) {
   closeMenus();
-  const menu = h("div", { class: "menu", role: "menu" }, entries.map((entry) => {
+  const open = back ? back.open : null;
+  const item = (entry) => {
     if (entry === null) return h("hr");
     const [label, action, key, why] = entry;
-    return h("button", { type: "button", role: "menuitem", disabled: !!why, title: why || undefined,
-      onclick: () => { closeMenus(); act(async () => action()); } },
+    const sub = Array.isArray(action);
+    return h("button", { type: "button", role: "menuitem", disabled: !sub && !!why, title: why || undefined,
+      "aria-haspopup": sub ? "true" : undefined,
+      onclick: (e) => {
+        e.stopPropagation();
+        if (sub) return showMenu(action, x, y, { entries, back, open });
+        closeMenus();
+        act(async () => action());
+      } },
     h("span", { class: "label" }, label),
-    why ? h("span", { class: "why" }, why) : h("span", { class: "key" }, key || ""));
-  }));
+    why ? h("span", { class: "why" }, why) : h("span", { class: sub ? "more" : "key" }, sub ? "▸" : key || ""));
+  };
+  const menu = h("div", { class: "menu", role: "menu" },
+    back ? h("button", { type: "button", role: "menuitem", class: "back", onclick: (e) => {
+      e.stopPropagation();
+      showMenu(back.entries, x, y, back.back);
+    } }, h("span", { class: "label" }, "◂ Back")) : null,
+    entries.map(item));
   document.body.append(menu);
   menu.style.left = Math.max(0, Math.min(x, innerWidth - menu.offsetWidth - 4)) + "px";
   menu.style.top = Math.max(0, Math.min(y, innerHeight - menu.offsetHeight - 4)) + "px";
 }
 
 const tick = (on, label) => (on ? "✓ " : "") + label;
-
-function itemMenu() {
-  const node = pickedItem();
-  const newWhy = containerForNew().deleted ? "that folder is deleted" : "";
-  const own = node.id === 1 ? "pick a folder, project, or module in the tree" : "";
-  return [
-    ["New project...", () => newItem("project", "project"), "", newWhy],
-    ["New folder...", () => newItem("folder", "folder"), "", newWhy],
-    ["New formal module...", () => newItem("formal", "formal module"), "", newWhy],
-    ["New link module...", () => newItem("link", "link module"), "", newWhy],
-    null,
-    ["Item properties / rename...", itemProperties, "", own || (node.deleted ? "the item is deleted" : "")],
-    ["Delete item...", deleteItem, "", own || (node.deleted ? "already deleted" : "")],
-    ["Undelete item", undeleteItem, "", node.deleted ? "" : "the item is not deleted"],
-    [tick(S.showDeletedItems, "Show deleted items"), async () => { S.showDeletedItems = !S.showDeletedItems; await loadTree(); }],
-  ];
-}
-
-const moveEntries = () => [["Move up", () => move("up"), "", can.move("up")], ["Move down", () => move("down"), "", can.move("down")],
-  ["Promote", () => move("promote"), "", can.move("promote")], ["Demote", () => move("demote"), "", can.move("demote")]];
-
-const objectEntries = () => [
-  ["Edit text", editMain, "F2", can.change()],
-  ["Object properties", showProps, "Enter", can.object()],
-];
-
-function objectMenu() {
-  return [
-    ...objectEntries(),
-    null,
-    ["Insert object (same level)", () => addObject("after"), "Ins", can.change()],
-    ["Insert object below (child)", () => addObject("child"), "Shift+Ins", can.change()],
-    ["Insert object before", () => addObject("before"), "", can.change()],
-    null,
-    ...moveEntries(),
-    null,
-    ["Start link", startLink, "", can.change()], ["Make link from start", finishLink, "", can.linkEnd()],
-    ["Create link...", linkDialog, "", can.change()],
-    null,
-    ["Delete object...", deleteObject, "Del", can.remove()], ["Undelete object", undeleteObject, "", can.undelete()],
-    ["Object history...", () => historyDialog(needObject().absno), "", can.object()],
-  ];
-}
-
-const MENUS = {
-  File: () => [...itemMenu(), null,
-    ["Baselines...", baselinesDialog, "", can.module()], ["New baseline...", newBaselineDialog, "", can.baseline()], null,
-    ["Import CSV...", importCsv, "", can.write()], ["Export CSV...", exportCsv, "", can.module()],
-    ["Import ReqIF...", importReqif, "", containerForNew().deleted ? "that folder is deleted" : ""],
-    ["Export ReqIF...", exportReqifDialog, "", formalModules().length ? "" : "there is no formal module"]],
-  Edit: () => [...objectEntries(), null, ...moveEntries(), null,
-    ["Delete object...", deleteObject, "Del", can.remove()], ["Undelete object", undeleteObject, "", can.undelete()], null,
-    ["Object history...", () => historyDialog(needObject().absno), "", can.object()],
-    ["Module history...", () => { needModule(); return historyDialog(); }, "", can.module()]],
-  View: () => [["Columns...", columnsDialog, "", can.module()],
-    ["DXL column...", () => act(dxlColumnDialog), "", can.baseline()],
-    [tick(S.outLinks, "Out-links column"), () => { S.outLinks = !S.outLinks; render(); }, "", can.module()],
-    [tick(S.inLinks, "In-links column"), () => { S.inLinks = !S.inLinks; render(); }, "", can.module()],
-    [tick(S.showDeleted, "Deleted objects"), async () => { S.showDeleted = !S.showDeleted; await refresh(); }, "", can.module()],
-    null, ["Filter...", filterDialog, "", can.module()],
-    ["Clear filter and sort", () => { clearFilters(); S.sort = null; render(); }, "",
-      can.module() || (S.quick || S.filter || S.sort || TRACE.filtering() ? "" : "nothing is filtered or sorted")],
-    null, ["Save view...", saveViewDialog, "", can.write()], ["Delete view...", deleteViewDialog, "", can.savedView()],
-    ["Refresh", async () => { await loadTree(); await refresh(); }]],
-  Insert: () => [
-    ["Object (same level)", () => addObject("after"), "Ins", can.change()],
-    ["Object below (child)", () => addObject("child"), "Shift+Ins", can.change()],
-    ["Object before", () => addObject("before"), "", can.change()],
-    ["Object at end of module", () => addObject("end"), "", can.write()], null,
-    ["Attribute...", () => newAttributeDialog(), "", can.write()]],
-  Link: () => [["Start link", startLink, "", can.change()], ["Make link from start", finishLink, "", can.linkEnd()],
-    ["Create link...", linkDialog, "", can.change()], null,
-    ["Show object's links", showProps, "", can.object()]],
-  Analysis: () => [["Compare with baseline...", () => compareDialog(), "", can.compare()],
-    ["Baselines...", baselinesDialog, "", can.module()]],
-  Tools: () => [["DXL editor...", openDxl], ["Attribute definitions...", attributesDialog, "", can.module()],
-    ["Recalculate DXL attributes", async () => { needModule(); await refresh(); say("Attribute DXL values recalculated."); }, "",
-      can.module() || (S.data.attributes.some((a) => a.dxl) ? "" : "no attribute DXL in this module")]],
-  Help: () => [["Keys and markers", () => dialog("Keys and markers", listTable(["Key or mark", "Meaning"], [
-    ["Up / Down", "Select the previous / next object"], ["F2 or double-click", "Edit in place"],
-    ["Ctrl+Enter", "Save the edit; in the DXL window, run"], ["Esc", "Cancel the edit"],
-    ["Enter", "Object properties"], ["Insert / Shift+Insert", "New object / new child"], ["Delete", "Delete object"],
-    ["Right-click, or Object...", "Everything that can be done with the selected object"],
-    ["▶ red", "The object has out-links"], ["◀ orange", "The object has in-links"],
-    ["SUSPECT / S", "The object at the other end of a link changed since the link was made or cleared"],
-  ].map((r) => h("tr", {}, r.map((c) => h("td", {}, c))))))]],
-};
 
 function buildMenubar() {
   const open = (button, name) => {
@@ -1771,7 +1803,7 @@ for (const [event, printing] of [["beforeprint", true], ["afterprint", false]]) 
   });
 }
 
-buildMenubar();
+// menus.js, loaded last, builds the menu bar.
 act(async () => {
   await loadTree();
   S.tree.children.forEach((c) => S.expanded.add(c.id));

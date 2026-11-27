@@ -2,7 +2,7 @@
 // Symbolic links are followed before the file policy looks at a path.
 
 import {
-  appendFileSync, copyFileSync, lstatSync, readFileSync, readdirSync, readlinkSync, renameSync, statSync, unlinkSync,
+  appendFileSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, statSync, unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
@@ -38,6 +38,10 @@ export class RealDisk extends VirtualDisk {
   override is_folder(full: string): boolean {
     // The temporary folder is /tmp to a script on every system.
     return full === "/tmp" || statSync(full, { throwIfNoEntry: false })?.isDirectory() === true;
+  }
+
+  override make_folder(full: string): void {
+    mkdirSync(full);
   }
 
   override children(full: string): string[] {

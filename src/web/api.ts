@@ -5,8 +5,8 @@
 // VirtualDisk and come back in `files`; the time limit is enforced outside, by
 // terminating the worker. Binary files travel as base64.
 
-import { ROOT, SYSTEM_ATTRIBUTES, AttrDxlError, Obj, Store, StoreError } from "../store.ts";
-import { DxlError, layout, run } from "../dxl/index.ts";
+import { ROOT, RIGHTS, SYSTEM_ATTRIBUTES, AttrDxlError, Obj, Store, StoreError, rights_names } from "../store.ts";
+import { DxlError, coverage, layout, run } from "../dxl/index.ts";
 import type { DialogSession } from "../dxl/index.ts";
 import type { DialogEvent, Progress } from "../dxl/lib/dialogs.ts";
 import type { VirtualDisk } from "../dxl/files.ts";
@@ -207,10 +207,12 @@ export class Api {
       attributes: attributes.map((a) => ({
         name: a.name, type: a.type_name, base: a.base, scope: a.scope,
         multi: a.multi, default: a.default, values: Array.from(a.values), dxl: a.dxl,
+        description: a.description, inherit: a.inherit, history: a.history, bars: a.bars, dates: a.dates,
         module_value: a.scope === "module" ? store.module_value(module, a.name) : null,
       })),
       types: Array.from(store.types(module) as Iterable<any>, (t: any) => ({
-        name: t.name, base: t.base, values: Array.from(t.values),
+        name: t.name, base: t.base, values: Array.from(t.values), description: t.description,
+        numbers: Array.from(t.numbers), min: t.min, max: t.max, users: store.type_users(module, t.name),
       })),
       system_attributes: system,
       rows,
@@ -259,14 +261,27 @@ export class Api {
     return { absno: this.store.create_object(module, parent, after, before, _obj_values(values)).absno };
   }
 
-  op_set_values({ module, absno, values }: any): void {
+  // Does an object only show its parent's (or the default) value of this attribute?
+  _inherited(obj: Obj, name: string): boolean {
+    return !!this.store.attribute(obj.module_id, name)?.inherit && !this.store.has_own_value(obj, name);
+  }
+
+  // `made_own` names the inherited cells that now hold a value of their own. An
+  // inherited cell given back unchanged is left inherited.
+  op_set_values({ module, absno, values }: any): { made_own: string[] } | void {
     const obj = this._existing(module, absno);
+    const made_own: string[] = [];
     this.store.transaction(() => {
       for (const [name, value] of Object.entries(values)) {
         if (typeof value !== "string") throw new StoreError(`${name}: the value must be text`);
-        this.store.set_value(obj, name, value.replaceAll("\r\n", "\n"));
+        const text = value.replaceAll("\r\n", "\n");
+        const inherited = this._inherited(obj, name);
+        if (inherited && this.store.value(obj, name) === text) continue;
+        this.store.set_value(obj, name, text);
+        if (inherited) made_own.push(name);
       }
     });
+    if (made_own.length) return { made_own };
   }
 
   op_move_object({ module, absno, direction }: any): void {
@@ -331,15 +346,319 @@ export class Api {
     this.store.clear_suspect(this._link(source, link));
   }
 
+  // -- editing more than one thing at once ----------------------------------
+
+  // Move (cut) or copy an object with its children, after `ref`, below it, or at the end.
+  op_paste_object({ source, module: module_arg, ref = null, where = "end", cut = false }: any): any {
+    const store = this.store;
+    const module = this._formal(module_arg).id;
+    const from = this._existing(source.module, source.absno);
+    if (store.is_deleted(from)) throw new StoreError(`${store.identifier(from)} is deleted`);
+    const place = ref === null ? null : this._existing(module, ref);
+    const parent = place && where === "child" ? place : null;
+    const after = place && where !== "child" ? place : null;
+    if (cut) {
+      if (from.module_id !== module) throw new StoreError("a cut object moves within its own module; use Copy to put it in another");
+      store.move_object(from, parent, after);
+      return { absno: from.absno, count: 1, skipped: [] };
+    }
+    // Read the whole branch first: it may be pasted inside itself.
+    const known = new Map(store.attributes(module).map((a) => [a.name, a]));
+    const values: any = store.values(from.module_id, true); // inherited values stay inherited
+    const skipped = new Set<string>();
+    type Branch = { values: Map<string, string>; children: Branch[] };
+    const read = (obj: Obj): Branch => {
+      const held = new Map<string, string>();
+      for (const [name, value] of (values.get(obj.absno) ?? []) as Iterable<[string, string]>) {
+        const target = known.get(name);
+        if (!value || target?.dxl) continue;
+        if (!target || (target.base === "Enumeration" && !value.split("\n").every((v) => target.values.includes(v)))) skipped.add(name);
+        else held.set(name, value);
+      }
+      return { values: held, children: store.child_objects(obj.module_id, obj.absno).filter((o) => !store.is_deleted(o)).map(read) };
+    };
+    const branch = read(from);
+    let count = 0;
+    return store.transaction(() => {
+      const make = (node: Branch, up: Obj | null, behind: Obj | null): Obj => {
+        const made = store.create_object(module, up, behind, null, node.values);
+        count++;
+        for (const child of node.children) make(child, made, null);
+        return made;
+      };
+      const top = make(branch, parent, after);
+      return { absno: top.absno, count, skipped: [...skipped] };
+    });
+  }
+
+  // The text moves into a new first child, leaving the heading by itself.
+  op_split_heading({ module, absno }: any): void {
+    const store = this.store;
+    const obj = this._existing(module, absno);
+    const heading = store.value(obj, "Object Heading"), text = store.value(obj, "Object Text");
+    if (!heading || !text) throw new StoreError(`${store.identifier(obj)} needs both a heading and text to split them`);
+    store.transaction(() => {
+      const first = store.child_objects(obj.module_id, obj.absno)[0];
+      store.create_object(obj.module_id, first ? null : obj, null, first ?? null, new Map([["Object Text", text]]));
+      store.set_value(obj, "Object Text", "");
+    });
+  }
+
+  // Each paragraph of the text after the first becomes an object of its own, after this one.
+  op_split_object({ module, absno }: any): void {
+    const store = this.store;
+    const obj = this._existing(module, absno);
+    const parts = store.value(obj, "Object Text").split(/\n[ \t]*\n/).map((p) => p.replace(/^\n+|\s+$/g, "")).filter(Boolean);
+    if (parts.length < 2) throw new StoreError(`${store.identifier(obj)} has no blank line in its Object Text to split at`);
+    store.transaction(() => {
+      store.set_value(obj, "Object Text", parts[0]);
+      let last = obj;
+      for (const text of parts.slice(1)) last = store.create_object(obj.module_id, null, last, null, new Map([["Object Text", text]]));
+    });
+  }
+
+  op_purge({ module }: any): any {
+    return { purged: this.store.purge(this._formal(module).id) };
+  }
+
+  // Plain-text replacement in the String and Text attributes of the objects named.
+  op_replace_text({ module: module_arg, absnos, find, replace, match_case = false }: any): any {
+    const store = this.store;
+    const module = this._formal(module_arg).id;
+    if (typeof find !== "string" || !find) throw new StoreError("type what to find");
+    const pattern = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), match_case ? "g" : "gi");
+    const names = store.attributes(module).filter((a) => !a.dxl && (a.base === "String" || a.base === "Text")).map((a) => a.name);
+    const changes: Array<{ absno: number; name: string; before: string; after: string }> = [];
+    let count = 0;
+    store.transaction(() => {
+      for (const absno of absnos) {
+        const obj = this._existing(module, absno);
+        for (const name of names) {
+          if (this._inherited(obj, name)) continue; // replaced where it is held
+          const before = store.value(obj, name);
+          let found = 0;
+          const after = before.replace(pattern, () => { found++; return String(replace); });
+          if (!found || after === before) continue;
+          store.set_value(obj, name, after);
+          count += found;
+          changes.push({ absno: obj.absno, name, before, after: store.value(obj, name) });
+        }
+      }
+    });
+    return { count, changes };
+  }
+
+  // Undo of values: put `before` back where `after` is still what is held.
+  op_restore_values({ module, changes }: any): any {
+    let skipped = 0;
+    this.store.transaction(() => {
+      for (const { absno, name, before, after } of changes) {
+        const obj = this.store.object(int(module), int(absno));
+        if (obj === null || this.store.value(obj, name) !== after) skipped++;
+        else this.store.set_value(obj, name, before);
+      }
+    });
+    return { skipped };
+  }
+
+  // -- types, attributes and removal for good ---------------------------------
+
+  op_create_type({ module, name, base, values = [], extras = {} }: any): void {
+    this.store.create_type(this._formal(module).id, name, base, Array.from(values), extras);
+  }
+
+  op_modify_type({ module, name, changes, keeping = false }: any): void {
+    this.store.modify_type(this._formal(module).id, name, changes, Boolean(keeping));
+  }
+
+  op_delete_type({ module, name }: any): void {
+    this.store.delete_type(this._formal(module).id, name);
+  }
+
+  op_modify_attribute({ module, name, changes }: any): void {
+    this.store.modify_attribute(this._formal(module).id, name, changes);
+  }
+
+  op_purge_object({ module, absno }: any): void {
+    const obj = this._existing(module, absno);
+    if (!this.store.is_deleted(obj)) throw new StoreError(`delete ${this.store.identifier(obj)} first`);
+    this.store.purge_object(obj);
+  }
+
+  op_purge_item({ id }: any): void {
+    this.store.purge_item(int(id));
+  }
+
+  op_set_project({ id, project }: any): void {
+    this.store.set_project(int(id), Boolean(project));
+  }
+
+  // -- link module rules of a folder ------------------------------------------
+
+  op_link_rules({ folder }: any): any {
+    const store = this.store;
+    const id = int(folder);
+    const here = Array.from(store.children(id) as Iterable<any>).filter((i: any) => i.kind === "formal");
+    const all = Array.from(store.walk() as Iterable<any>).filter((i: any) => i.kind === "formal");
+    return {
+      rules: store.link_descriptors(id),
+      sources: here.map((i: any) => ({ id: i.id, name: i.name, exclusive: store.links_exclusive(id, i.id) })),
+      // a module of this folder goes by its name, one elsewhere by its path
+      targets: all.map((i: any) => (i.parent === id ? i.name : store.path(i.id))),
+    };
+  }
+
+  op_add_link_rule({ folder, source, target, linkmod, mandatory = false, overridable = true }: any): void {
+    this.store.add_link_descriptor(int(folder), { source, target, linkmod, mandatory: Boolean(mandatory),
+      overridable: Boolean(overridable) });
+  }
+
+  op_remove_link_rule({ folder, source, target }: any): void {
+    this.store.remove_link_descriptor(int(folder), source, target);
+  }
+
+  op_set_links_exclusive({ folder, module, exclusive }: any): void {
+    this.store.set_links_exclusive(int(folder), int(module), Boolean(exclusive));
+  }
+
+  // -- links in bulk --------------------------------------------------------
+
+  // Out-links from each object to the target objects whose identifiers its attribute lists.
+  op_link_by_attribute({ module: module_arg, attribute, target_module, link_module = null, preview = true }: any): any {
+    const store = this.store;
+    const module = this._formal(module_arg).id;
+    const target = this._formal(target_module).id;
+    if (target === module) throw new StoreError("choose another module as the target");
+    if (!store.has_attribute(module, attribute)) throw new StoreError(`there is no attribute '${attribute}'`);
+    const prefix = store.prefix(target);
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // With no prefix, only a list of bare numbers is read: other digits are not identifiers.
+    const listed = (text: string): string[] => {
+      if (prefix) return [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escaped}[0-9]+(?![A-Za-z0-9_])`, "g"))].map((m) => m[0]);
+      const parts = text.split(/[\s,;]+/).filter(Boolean);
+      return parts.every((p) => /^[0-9]+$/.test(p)) ? parts : [];
+    };
+    const missing = new Set<string>(), refused = new Set<string>();
+    let made = 0, existing = 0;
+    const path = link_module || null;
+    const rolled_back = new Error("preview");
+    try {
+      store.transaction(() => {
+        for (const obj of store.objects(module)) {
+          for (const name of new Set(listed(store.value(obj, attribute)))) {
+            const end = store.by_identifier(target, name);
+            if (end === null || store.is_deleted(end)) { missing.add(name); continue; }
+            const held = store.links(obj, true).some((l) => l.target.equals(end)
+              && (!path || store.path(l.link_module) === path));
+            if (held) { existing++; continue; }
+            try {
+              store.create_link(obj, end, path);
+              made++;
+            } catch (e) {
+              if (!(e instanceof StoreError)) throw e;
+              refused.add(e.message);
+            }
+          }
+        }
+        // a preview is the real thing undone, so that it refuses what the real thing would
+        if (preview) throw rolled_back;
+      });
+    } catch (e) {
+      if (e !== rolled_back) throw e;
+    }
+    return { made, existing, missing: [...missing], refused: [...refused] };
+  }
+
+  // Every link a link module holds, between objects that are not deleted.
+  op_link_module({ module }: any): any {
+    const store = this.store;
+    const id = int(module);
+    if (store.item(id).kind !== "link") throw new StoreError(`${store.item(id).name} is not a link module`);
+    const links: any[] = [];
+    const held = new Map<number, any>();
+    const end = (obj: Obj) => {
+      if (!held.has(obj.module_id)) held.set(obj.module_id, store.values(obj.module_id));
+      const values: Map<string, string> = held.get(obj.module_id).get(obj.absno) ?? new Map();
+      return { module: obj.module_id, absno: obj.absno, id: store.identifier(obj), path: store.path(obj.module_id),
+        text: values.get("Object Heading") || values.get("Object Text") || "" };
+    };
+    const formal = Array.from(store.walk() as Iterable<any>).filter((i: any) => i.kind === "formal");
+    const live = new Set<number>(formal.map((i: any) => i.id));
+    for (const item of formal) {
+      for (const obj of store.objects(item.id)) {
+        for (const link of store.links(obj, true)) {
+          if (link.link_module !== id || !live.has(link.target.module_id) || store.is_deleted(link.target)) continue;
+          const [source_changed, target_changed] = store.suspect(link);
+          links.push({ id: link.id, source: end(link.source), target: end(link.target), source_changed, target_changed });
+        }
+      }
+    }
+    const sets = store.linksets(id).filter(([a, b]) => live.has(a) && live.has(b))
+      .map(([a, b]) => ({ source: { id: a, path: store.path(a) }, target: { id: b, path: store.path(b) } }));
+    return { links, linksets: sets };
+  }
+
+  // -- linksets and the default link module -----------------------------------
+
+  op_create_linkset({ module, source, target }: any): void {
+    this.store.create_linkset(int(module), int(source), int(target));
+  }
+
+  op_delete_linkset({ module, source, target }: any): void {
+    this.store.delete_linkset(int(module), int(source), int(target));
+  }
+
+  op_default_link(_args: any = {}): any {
+    return { name: this.store.default_link_name ?? "" };
+  }
+
+  op_set_default_link({ name }: any): void {
+    this.store.set_default_link_name(String(name));
+  }
+
+  // -- access rights -----------------------------------------------------------
+
+  // A folder or module by `item`, or an object by `module` and `absno`.
+  _guarded_thing({ item, module, absno }: any): number | Obj {
+    return absno === undefined || absno === null ? int(item) : this._existing(module, absno);
+  }
+
+  op_access(args: any): any {
+    const thing = this._guarded_thing(args);
+    return {
+      user: this.store.user, inherited: this.store.is_access_inherited(thing), root: thing === ROOT,
+      entries: this.store.access_list(thing).map((e) => ({ name: e.name, rights: rights_names(e.rights) })),
+    };
+  }
+
+  // `action`: specific, inherit, set, unset, or reset (not checked: the way out of a lockout).
+  op_change_access(args: any): void {
+    const thing = this._guarded_thing(args);
+    const { action, name = null, rights = [] } = args;
+    if (action === "specific") this.store.make_access_specific(thing);
+    else if (action === "inherit") this.store.make_access_inherited(thing);
+    else if (action === "reset") this.store.reset_access(thing);
+    else if (action === "unset") this.store.unset_access(thing, name);
+    else if (action === "set") {
+      this.store.set_access(thing, name, (rights as Array<keyof typeof RIGHTS>).reduce((bits, r) => bits | RIGHTS[r], 0));
+    } else throw new StoreError(`unknown access action '${action}'`);
+  }
+
+  // -- what of DXL is here --------------------------------------------------
+
+  op_dxl_coverage(_args: any = {}): any {
+    return coverage();
+  }
+
   // -- attribute definitions ------------------------------------------------
 
   op_create_attribute({ module: module_arg, name, type, scope = "object", multi = false, default: initial = "",
-    new_type = null, dxl = "" }: any): void {
+    new_type = null, dxl = "", extras = {} }: any): void {
     const module = this._formal(module_arg).id;
     if (scope !== "object" && scope !== "module") throw new StoreError(`unknown scope '${scope}'`);
     this.store.transaction(() => {
       if (new_type) this.store.create_type(module, type, new_type.base, Array.from(new_type.values ?? []));
-      this.store.create_attribute(module, name, type, scope, multi, initial, dxl);
+      this.store.create_attribute(module, name, type, scope, multi, initial, dxl, extras);
     });
   }
 

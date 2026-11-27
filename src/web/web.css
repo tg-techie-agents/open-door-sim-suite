@@ -116,6 +116,38 @@ body { height: 100dvh; }
 .dxlbox .problem { color: #a40000; font-weight: 600; padding: 0 10px; white-space: pre-wrap; }
 .dxlbox .problem:empty { display: none; }
 .dxlbox .problem .note { color: #333; font-weight: 400; }
+.dxlframe { flex: 1 1 auto; border: 1px solid var(--edge); padding: 4px 8px 2px; box-sizing: border-box; }
+.dxlframe > .legend { font-weight: 600; margin-bottom: 4px; }
+.dxltabs { display: flex; flex-direction: column; box-sizing: border-box; }
+.dxltabs > .strip { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--edge); }
+.dxltabs > .strip button { border-bottom: 0; border-radius: 4px 4px 0 0; }
+.dxltabs > .strip button[aria-selected="true"] { background: #fff; font-weight: 700; }
+.dxltabs > .inner { flex: 1; border: 1px solid var(--edge); border-top: 0; padding: 8px; }
+.dxlbox .dxltree ul { list-style: none; margin: 0; padding: 0; }
+.dxlbox .dxltree ul ul { padding-left: 18px; }
+.dxlbox .dxltree li { white-space: nowrap; }
+.dxlbox .dxltree .knob { display: inline-block; width: 18px; height: 18px; min-width: 0; min-height: 0; padding: 0; margin-right: 4px; vertical-align: middle; line-height: 1; }
+.dxlbox .dxltree .name { display: inline-block; padding: 2px 4px; cursor: default; user-select: none; vertical-align: middle; }
+.dxlbox .dxltree .name.picked { background: #316ac5; color: #fff; }
+.dxlbox .dxlsplit { display: flex; align-items: stretch; flex: 1 1 100%; min-width: 0; }
+.dxlbox .dxlsplit > .element { flex: 1 1 0; min-width: 0; }
+.dxlbox .dxlsplit > .element .dxllist { width: 100% !important; min-width: 0; }
+.dxlbox .dxlhandle { flex: 0 0 auto; width: 6px; margin: 0 2px; background: var(--edge); cursor: col-resize; touch-action: none; }
+.dxlbox .dxlslider input { flex: 1; min-width: 120px; }
+.dxlbox .dxlslider output { min-width: 3ch; text-align: right; }
+.dxlbox .dxlcanvas { display: block; background: #fff; border: 1px solid #7f9db9; max-width: 100%; height: auto; }
+.dxlbox .dxlmenubutton { align-self: flex-start; }
+.dxlmenubar:empty, .dxlstatuses:empty { display: none; }
+.dxlmenubar .menus { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px 6px; border-bottom: 1px solid var(--edge); }
+.dxlmenubar button { border-color: transparent; background: transparent; }
+.dxlstatus { display: flex; border-top: 1px solid var(--edge); font-size: 12px; }
+.dxlstatus span { flex: 1; min-width: 0; padding: 2px 6px; border-right: 1px solid var(--edge); overflow-wrap: anywhere; min-height: 1.4em; }
+.dxlpopup { position: fixed; z-index: 60; display: flex; flex-direction: column; min-width: 160px; max-width: calc(100vw - 8px); max-height: calc(100dvh - 16px); overflow: auto; padding: 2px; background: var(--face); border: 1px solid var(--title); box-shadow: 3px 4px 12px #0006; }
+.dxlpopup button { text-align: left; border-color: transparent; background: transparent; padding: 4px 10px 4px 4px; }
+.dxlpopup button:not([disabled]):hover, .dxlpopup button:focus { background: #316ac5; color: #fff; }
+.dxlpopup button.sub { padding-left: 20px; }
+.dxlpopup .tick { display: inline-block; width: 18px; }
+.dxlpopup .group { padding: 4px 10px 2px 22px; font-weight: 700; }
 .dxlmessage { z-index: 45; left: 50%; top: 18%; transform: translateX(-50%); }
 .dxlmessage .message { margin-bottom: 8px; }
 .dxlmessage .message .heading { font-weight: 700; }
@@ -129,4 +161,61 @@ body { height: 100dvh; }
   /* a list's columns narrow to fit, rather than the last ones leaving the screen */
   .dxlbox .dxllist th { min-width: 0 !important; }
   .dxlbox .dxllist td { white-space: normal; overflow-wrap: anywhere; }
+  .dxlbox .dxlsplit { flex-direction: column; gap: 6px; }
+  .dxlbox .dxltree .knob { min-height: 0; }
+  .dxlbox .dxlsplit > .element { flex: 0 0 auto !important; }
+  .dxlbox .dxlhandle { display: none; }
+  .dxlbox .dxltree li { white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* Menus: submenus, greyed entries, the column headings' own menus. */
+.menu .back { font-weight: 600; border-bottom: 1px solid var(--edge); }
+.menu button:disabled .why { max-width: 300px; }
+.grid th { cursor: pointer; }
+.grid th.picked { background: #c1d2ee; }
+#toolbar > button.on { background: #c1d2ee; border-color: #316ac5; }
+
+#findbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: 1px solid var(--edge); }
+#findbar .found { color: #555; }
+
+#outline { width: 240px; flex: none; resize: horizontal; overflow: auto; background: #fff; border-right: 1px solid var(--edge); padding: 4px; }
+#outline .node { cursor: pointer; }
+.pane-title { display: flex; justify-content: space-between; align-items: center; font-weight: 600; padding: 0 2px 4px; border-bottom: 1px solid var(--edge); margin-bottom: 4px; }
+
+/* Markers: link arrows are buttons, a change bar since the latest baseline, deleted in red. */
+.grid button.mark { background: none; border: 0; padding: 0 2px; min-width: 0; min-height: 0; cursor: pointer; }
+.mark.start { color: #316ac5; }
+.grid td.main.changed { border-left: 4px solid #c9a227; }
+.grid tr.deleted td { color: #a40000; }
+.collapsed { color: #555; font-weight: 700; }
+.commit { display: flex; gap: 6px; margin-top: 2px; }
+.rule { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.redline del, .list del { color: #a40000; }
+.linkwindow { padding: 8px 10px; }
+
+/* The Help and DXL coverage pages. */
+dialog.page { width: min(900px, 94vw); max-width: 94vw; }
+.cov-controls { display: flex; flex-wrap: wrap; gap: 6px; position: sticky; top: -10px; background: var(--face); padding: 6px 0; z-index: 1; }
+table.coverage td.cov-name { width: 32%; font-weight: 600; max-width: none; }
+table.coverage td.cov-status { width: 12%; white-space: nowrap; }
+.cov-full td.cov-status { background: #e3f6dd; }
+.cov-part td.cov-status { background: #fff6d5; }
+.cov-no td.cov-status { background: #fbe0e0; }
+.cov-where { color: #555; font-size: 11px; }
+details summary { cursor: pointer; font-weight: 600; padding: 3px 0; }
+
+@media (max-width: 700px), (pointer: coarse) and (max-height: 500px) {
+  /* the Module Explorer is a drawer too */
+  #outline { display: none; position: absolute; top: 0; bottom: 0; left: 0; width: min(320px, 88vw); z-index: 13; resize: none; box-shadow: 4px 0 14px #0006; }
+  body.outline-open #outline:not([hidden]) { display: block; }
+  .grid button.mark { min-width: 34px; min-height: 34px; }
+  table.coverage td.cov-name, table.coverage td.cov-status { width: auto; }
+}
+
+@media print {
+  #notice, #menubar, #toolbar, #findbar, #explorer, #outline, #props, #dxl, #status, #stop, .menu, .dxlbox { display: none !important; }
+  html, body { height: auto; background: #fff; }
+  body, #body { display: block; }
+  #main { overflow: visible; }
+  .grid th { position: static; }
 }

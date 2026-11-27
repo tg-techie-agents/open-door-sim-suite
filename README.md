@@ -95,6 +95,19 @@ as a script. The command line draws the box as text and runs no callback.
 - Offered: fields, text, choices, toggles, radio and check boxes, lists, list
   views with columns, buttons (`apply`, `ok`, `close`), message boxes,
   `confirm`, and progress bars.
+- Also offered: frames and tab strips (with `inside` placement), splitters,
+  tree views, sliders, status bars, menu bars, right-click menus on lists,
+  trees and canvases (also on a button, for touch), and canvases with
+  `rectangle`, `box`, `line`, `ellipse`, `polarLine`, `draw`, `drawAngle`,
+  `font`, the colour functions and `width`/`height`.
+- On those: a canvas is repainted when its box is shown and after each action;
+  its colour shades and fonts are this suite's. Icons, menu mnemonics and
+  Ctrl hot keys are accepted and do nothing. Refused because the manual does not
+  settle them: a tree item with no parent or a repeated name, `inactive` on a
+  frame, a second right-click menu, and `polygon`.
+- Not offered: tool bars, HTML controls, rich text fields, canvas bitmaps,
+  printing, mouse callbacks and scroll bars, drag and drop, and setting
+  positions and sizes (`setPos`, `setSize`).
 - Approximated: placement (`left`, `beside`, `full`, ...) and sizes only roughly
   match; styles and `stacked` are ignored. Message boxes do not pause the
   script. The "Answer Yes to confirm()" tick answers `confirm`; you are not
@@ -114,14 +127,21 @@ edits behind them, so a freshly loaded project has no change details to show.
 ## What it does not do
 
 Run `node src/cli.ts functions` for the DXL that is offered; it is a part of
-DXL, not all of it. Anything else is refused by name with a line number.
+DXL, not all of it. Anything else is refused by name with a line number, and
+a real DOORS name that is not here says so, so you can tell it from a typo.
+`copyToClipboard` and `activateURL` show what they would copy or open; neither
+is done. `platform` answers `WIN32`, and `userLocale` is the US-style locale
+dates are already read and written in.
 
-- No canvases, frames, tabs, splitters, tree views or menu bars in dialog
-  boxes (see Dialog boxes above), no OLE (Excel and Word automation), triggers, setting
-  access rights, or view definitions (`ViewDef`).
-- Columns and saved views work, and are shared with the interface; there is one
-  user, so the `can...` questions answer yes where the database allows it.
-  Built-in columns have stand-in widths.
+- No OLE (Excel and Word automation) and no triggers. No tool bars or HTML
+  controls in dialog boxes (see Dialog boxes above).
+- Access rights can be set and are enforced for folders, projects, modules, and
+  objects, but there is one user and no groups, and read access cannot be taken
+  away. View definitions (`ViewDef`) do not keep a script's filter or sort.
+- In the interface, Help lists what is full, partial, and not offered, and DXL
+  coverage name by name.
+- Columns and saved views work, and are shared with the interface. Built-in
+  columns have stand-in widths.
 - Text is stored without formatting. `richText()` answers only for one line of
   plain ASCII without `\ { }`; there is no `RichText` loop.
 - The only code page is `CP_UTF8`.
@@ -148,6 +168,8 @@ It refuses rather than guesses, so some scripts DOORS accepts are refused:
   `""` or `"\n"`.
 - A `Skip` list made with `create` refuses string keys; use `createString`.
 - Reading an empty integer, real, or Boolean attribute into a variable stops.
+  So does reading, from DXL, an attribute on an object older than the attribute
+  until the object is given a value.
 - Opening an already open module in another mode inside a `for` loop stops, and
   so does `close(m)` with unsaved changes (use `close(m, true)`, or save first).
 - A day-first slash date such as `23/05/2031` is invalid: slash dates are read

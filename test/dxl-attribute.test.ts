@@ -51,8 +51,7 @@ describe("creating attribute DXL from DXL", () => {
     const cases: [string, RegExp][] = [
       ['create module attribute "x" dxl "halt"', /only supported here/],
       ['create (default "1") (dxl "halt") attribute "x"', /only supported here/],
-      ['create (dxl "halt") (inherit true) attribute "x"', /inherit true is not supported/],
-      ['create (dxl "halt") (hidden true) attribute "x"', /hidden true is not supported/],
+      ['create (dxl "halt") (inherit true) attribute "x"', /inherited object attribute with DXL/],
       ['create (dxl "") attribute "x"', /code is empty/],
       ['print attrDXLName', /attrDXLName/],
     ];
