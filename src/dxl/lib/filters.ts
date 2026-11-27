@@ -5,6 +5,7 @@
 // set. An attribute handle is the AttrName_ that `attribute "x"` already builds
 // for attribute definitions (see management.ts).
 
+import { check_end } from "./pending.ts";
 import { parse_date, _SPACE, _ascii_digits, _repr, _strip } from "../../store.ts";
 import { Fault } from "../runtime.ts";
 import { current_module, shown } from "./database.ts";
@@ -191,6 +192,8 @@ export function link_test(has: boolean): (rt: any, ends: boolean[], name: string
       throw new Fault(`no link module ${_repr(name)}`);
     }
     return (rt: any, obj: any) => {
+      if (outgoing) check_end(rt, obj, true, name, "a link filter");
+      if (incoming) check_end(rt, obj, false, name, "a link filter");
       let found = Boolean(outgoing && rt.store.links(obj, true, name).length);
       if (!found && incoming) {
         const inward = rt.store.links(obj, false, name);

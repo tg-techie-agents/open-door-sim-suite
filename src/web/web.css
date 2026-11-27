@@ -219,3 +219,10 @@ details summary { cursor: pointer; font-weight: 600; padding: 3px 0; }
   #main { overflow: visible; }
   .grid th { position: static; }
 }
+
+/* several objects selected, a started link, and link arrows (out red, in yellow) */
+.grid tbody tr.chosen td { background: #f6d9ea; color: #6b0f3c; }
+.grid tbody tr.chosen.picked td { background: #eec1dc; }
+.grid tbody tr.linkstart td.main { background: #ffd3df; }
+:root { --link-in: #a87f00; }
+#outline .node.excluded { opacity: .45; }

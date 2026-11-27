@@ -9,7 +9,7 @@ import { create_before, move } from "./database.ts";
 /** Using DOORS 9.2: projects, folders and modules may be named with letters,
  * digits, spaces, periods, underscores and hyphens. The answer is the first
  * other character, or the null char when there is none. */
-function invalid_char(name: string): string {
+export function invalid_char(name: string): string {
   for (const c of name) {
     if (c > "\x7f" && /\p{L}|\p{N}/u.test(c)) {
       throw new Fault("whether DOORS accepts a letter or digit outside ASCII in a name is not documented");

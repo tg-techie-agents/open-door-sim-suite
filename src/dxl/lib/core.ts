@@ -1,7 +1,7 @@
 // print, halt, error trapping, message boxes, error and warn, the clipboard.
 
 import type { Library } from "../registry.ts";
-import { Halt, base_text } from "../runtime.ts";
+import { Fault, Halt, base_text } from "../runtime.ts";
 
 function _print(rt: any, value: any, type_name?: string): void {
   rt.out.write(base_text(value, type_name));
@@ -56,6 +56,10 @@ export function register(lib: Library): void {
   // DOORS prints the message and raises a box; error() then ends the script
   const [error, warn] = [_box("error"), _box("warn")];
   lib.add("error", ["string"], "void", (rt, message) => {
+    if (rt.trapping) {
+      throw new Fault("error: whether noError stops DOORS from ending the script here is not documented; "
+        + "call lastError first");
+    }
     error(rt, message);
     _halt(rt);
   });

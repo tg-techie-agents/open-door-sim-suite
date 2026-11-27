@@ -6,8 +6,9 @@
 
 import { AttrDef, AttrType, Baseline, Store, StoreError, _repr } from "../../store.ts";
 import { key } from "../registry.ts";
-import { Fault } from "../runtime.ts";
+import { Fault, is_limit } from "../runtime.ts";
 import { attempt, current_module } from "./database.ts";
+import { check_source } from "./pending.ts";
 
 export const BASE_CONSTANTS = new Map<string, string>([
   ["attrText", "Text"], ["attrString", "String"], ["attrInteger", "Integer"],
@@ -206,7 +207,7 @@ export function create_type(rt: any, name: string, base: string, values: any[], 
   try {
     rt.store.create_type(module_id, name, base, [...values], extras);
   } catch (e) {
-    if (!(e instanceof StoreError)) throw e;
+    if (!(e instanceof StoreError) || is_limit(e.message)) throw e;
     error.set(e.message);
     return null;
   }
@@ -511,7 +512,13 @@ export function register_attributes(lib: any): void {
         const module_id = type_to_change(rt, t);
         const now = rt.store.types(module_id).find((x: any) => x.name === t.name);
         if (now.base !== base) throw new Fault(`${call}: ${_repr(t.name)} is not a ${base} type`);
-        if (!applies) return true; // as documented: the limit given is ignored
+        if (!applies) {
+          // "ignored": with a limit already set, that could mean it stays or goes
+          if (now[field] !== "") {
+            throw new Fault(`${call}: whether false removes the limit the type already has is not documented`);
+          }
+          return true;
+        }
         return !attempt(() => rt.store.modify_type(module_id, t.name, { [field]: String(value) }));
       });
     }
@@ -574,6 +581,7 @@ export function create_baseline(rt: any, module_id: any, wanted: any, annotation
       throw new Fault("only the next major or next minor version can be baselined here");
     }
   }
+  check_source(rt, module_id, "create baseline");
   rt.store.create_baseline(module_id, annotation, major, wanted.suffix);
   // DOORS closes the module it has just baselined.
   rt.opened.delete(module_id);
@@ -616,10 +624,18 @@ export function register_baselines(lib: any): void {
   lib.type("Baseline");
   lib.loop("Module", "Baseline", (rt: any, m: any) => rt.store.baselines(rt.opened_module(m)));
   for (const [name, field, returns] of [["major", "major", "int"], ["minor", "minor", "int"],
-    ["suffix", "suffix", "string"], ["annotation", "annotation", "string"],
-    ["user", "created_by", "string"]]) {
+    ["suffix", "suffix", "string"], ["user", "created_by", "string"]]) {
     lib.add(name, ["Baseline"], returns, read_baseline(field));
   }
+  const annotation = read_baseline("annotation");
+  lib.add("annotation", ["Baseline"], "string", (rt: any, b: any) => {
+    const text = annotation(rt, b);
+    const set = rt.store.baseline_set_of(b.copy_id);
+    if (set && rt.store.set_definition(set.folder, set.id).sets[set.index].annotation) {
+      throw new Fault("whether a baseline made in a baseline set takes the set's annotation is not documented");
+    }
+    return text;
+  });
   const created_on = read_baseline("created_on");
   lib.add("dateOf", ["Baseline"], "Date", (rt: any, b: any) => date(rt, created_on(rt, b)));
 
@@ -652,6 +668,7 @@ export function history(rt: any, module_id: any, absno: number | null = null): a
   if (rt.store.is_baseline(module_id)) {
     throw new Fault("the history of a baseline is not kept here");
   }
+  check_source(rt, module_id, "history", absno);
   return rt.store.history(module_id, absno);
 }
 

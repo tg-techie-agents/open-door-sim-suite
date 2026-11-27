@@ -10,6 +10,7 @@ const wideBox = (box) => box.problem.closest("dialog").classList.add("page");
 // ---------------------------------------------------------------- opening, modes, places
 
 function setReadOnly(on) {
+  if (!on && S.readOnly && current()) act(() => api("record_session", { module: S.moduleId }));
   S.readOnly = on;
   render();
   say(on ? "Read-only: nothing on screen can change this module." : "Exclusive edit.");
@@ -18,8 +19,15 @@ function setReadOnly(on) {
 async function openModuleAs(id, readOnly) {
   const node = S.items.get(id);
   for (let up = node.parent; up; up = up.parent) S.expanded.add(up.id);
-  await pickItem(id);
-  if (node.kind === "formal") setReadOnly(readOnly);
+  S.openingReadOnly = readOnly;
+  try {
+    await pickItem(id);
+  } finally {
+    S.openingReadOnly = false;
+  }
+  if (node.kind === "formal") {
+    setReadOnly(readOnly);
+  }
 }
 
 function openDialog() {
@@ -154,12 +162,12 @@ function modulePropertiesDialog() {
   let box = null;
   const history = () => { box.problem.closest("dialog").close(); act(() => historyDialog()); };
   box = dialog("Properties of " + m.path, h("div", {},
-    h("div", { class: "form" }, h("label", {}, "Name"), name, h("label", {}, "Description"), description,
+    h("div", { class: "form" }, h("label", {}, "Name"), name, h("label", {}, "Description (heads the main column)"), description,
       h("label", {}, "ID prefix"), prefix),
     h("h4", {}, "About"), h("pre", { class: "filetext" }, counts + (m.baseline ? `\nBaseline: ${m.baseline}` : "")),
     h("p", {}, h("button", { type: "button", onclick: history }, "History..."), " ",
       h("button", { type: "button", onclick: () => { box.problem.closest("dialog").close(); act(() => accessDialog({ item: m.owner }, m.path)); } }, "Access..."), " ",
-      h("button", { type: "button", onclick: () => { box.problem.closest("dialog").close(); act(linkRulesDialog); } }, "Link module rules...")),
+      h("button", { type: "button", onclick: () => { box.problem.closest("dialog").close(); act(() => linkRulesDialog(node.name)); } }, "Linksets...")),
     ), [
     editable ? { label: "Save", primary: true, action: async () => {
       await api("update_item", { id: node.id, name: name.value, description: description.value, prefix: prefix.value });
@@ -171,13 +179,20 @@ function modulePropertiesDialog() {
 
 const lines = (text) => text.split("\n").map((v) => v.trim()).filter(Boolean);
 
-// A new type, or `type` changed.
-function typeForm(type, done) {
+// A new type (starting as a copy of `like`), or `type` changed.
+function typeForm(type, done, like) {
   const m = needModule();
   const name = field({ value: type?.name }), description = field({ value: type?.description });
   const base = field({ type: "select", options: ["Enumeration", "String", "Text", "Integer", "Real", "Date"], value: type?.base });
   const values = field({ type: "textarea", value: type?.values.join("\n") });
   const min = field({ value: type?.min }), max = field({ value: type?.max });
+  if (like) {
+    base.value = like.base;
+    description.value = like.description || "";
+    values.value = like.values.join("\n");
+    min.value = like.min || "";
+    max.value = like.max || "";
+  }
   dialog(type ? "Edit type " + type.name : "New attribute type", h("div", {}, h("div", { class: "form" },
     h("label", {}, "Name"), name, h("label", {}, "Description"), description, h("label", {}, "Base"), base,
     h("label", {}, "Values, one per line (Enumeration)"), values,
@@ -202,6 +217,8 @@ function typeForm(type, done) {
   ]);
 }
 
+const BUILT_IN_TYPES = ["String", "Text", "Integer", "Real", "Date", "Boolean", "Username"];
+
 function typesDialog() {
   const m = needModule();
   const holder = h("div", {});
@@ -209,8 +226,10 @@ function typesDialog() {
     holder.replaceChildren(listTable(["Type", "Base", "Values or range", "Used by", ""], S.data.types.map((t) =>
       h("tr", {}, h("td", { title: t.description }, t.name), h("td", {}, t.base),
         h("td", {}, t.values.join(", ") || [t.min, t.max].filter(Boolean).join(" to ")), h("td", {}, t.users.join(", ")),
-        h("td", {}, writable() ? [h("button", { type: "button", onclick: () => act(() => typeForm(t, draw)) }, "Edit"), " ",
-          h("button", { type: "button", disabled: !!t.users.length, title: t.users.length ? "in use" : undefined,
+        // DOORS' own types can be copied but not changed
+        h("td", {}, writable() ? [BUILT_IN_TYPES.includes(t.name) ? null : [h("button", { type: "button", onclick: () => act(() => typeForm(t, draw)) }, "Edit"), " "],
+          h("button", { type: "button", onclick: () => act(() => typeForm(null, draw, t)) }, "Copy"), " ",
+          BUILT_IN_TYPES.includes(t.name) ? null : h("button", { type: "button", disabled: !!t.users.length, title: t.users.length ? "in use" : undefined,
             onclick: () => confirmDialog("Delete type", `Delete the type "${t.name}"?`, "Delete", async () => {
               await api("delete_type", { module: m.id, name: t.name });
               await refresh();
@@ -226,6 +245,8 @@ function attributeEditDialog(a, done) {
   const m = needModule();
   const name = field({ value: a.name }), description = field({ value: a.description });
   const type = field({ type: "select", options: S.data.types.map((t) => [t.name, t.name]), value: a.type });
+  type.disabled = true;
+  type.title = "An attribute's type cannot be changed once it is created";
   const multi = field({ type: "checkbox", value: a.multi }), initial = field({ value: a.default });
   const object = a.scope === "object";
   const checks = [["inherit", "Inherit from the parent object"], ["history", "Record edits in history"],
@@ -238,7 +259,7 @@ function attributeEditDialog(a, done) {
     checks.map(([, label, box]) => [h("label", {}, label), box]),
     h("label", {}, "Attribute DXL"), dxl), [
     { label: "Save", primary: true, action: async () => {
-      const changes = { name: name.value, description: description.value, type_name: type.value, multi: multi.checked,
+      const changes = { name: name.value, description: description.value, multi: multi.checked,
         default: initial.value, dxl: dxl.value.trim() ? dxl.value : "" };
       for (const [key, , box] of checks) if (!box.disabled) changes[key] = box.checked;
       await api("modify_attribute", { module: m.id, name: a.name, changes });
@@ -257,7 +278,7 @@ function containerFolder() {
   return node.kind === "folder" || node.kind === "project" ? node : node.parent;
 }
 
-function linkRulesDialog() {
+function linkRulesDialog(from) {
   const folder = containerFolder();
   if (!folder || folder.id === 1) throw new Error("Rules belong to a folder or project below the database root.");
   const holder = h("div", {});
@@ -268,7 +289,7 @@ function linkRulesDialog() {
   const draw = async () => {
     const info = await api("link_rules", { folder: folder.id });
     for (const [select, names] of [[source, info.sources.map((x) => x.name)], [target, info.targets]]) {
-      const chosen = select.value;
+      const chosen = select.value || (select === source && typeof from === "string" ? from : "");
       select.replaceChildren(...names.map((n) => h("option", { value: n }, n)));
       if (names.includes(chosen)) select.value = chosen;
     }
@@ -336,9 +357,10 @@ function accessDialog(thing, title) {
   const holder = h("div", {});
   const name = field({}), everyone = h("input", { type: "checkbox" });
   const boxes = RIGHT_NAMES.map((r) => h("input", { type: "checkbox", value: r, checked: r === "read" }));
+  const shown = (r) => (r === "control" ? "admin" : r); // the engine's name for it is control
   const adding = h("fieldset", {}, h("legend", {}, "Set an entry"), h("div", { class: "form" },
-    h("label", {}, "User or group name"), name, h("label", {}, "Everyone else instead"), everyone),
-  h("p", {}, boxes.map((b) => h("label", {}, b, ` ${b.value} `))));
+    h("label", {}, "User name"), name, h("label", {}, "Everyone else instead"), everyone),
+  h("p", {}, boxes.map((b) => h("label", {}, b, ` ${shown(b.value)} `))));
   let box = null;
   const change = (args) => act(async () => {
     box.problem.textContent = "";
@@ -357,7 +379,7 @@ function accessDialog(thing, title) {
       h("p", {}, `You are ${info.user}. `, info.root ? "The database root's rights cannot be changed here."
         : info.inherited ? "These rights are inherited from above." : "These rights are this item's own."),
       listTable(["Name", "Rights", ""], info.entries.map((e) => h("tr", {}, h("td", {}, e.name ?? "Everyone else"),
-        h("td", {}, e.rights.join(", ") || "none"),
+        h("td", {}, e.rights.map(shown).join(", ") || "none"),
         h("td", {}, !info.inherited && !info.root && e.name !== null ? button("Remove", { action: "unset", name: e.name }) : null)))),
       info.root ? "" : h("p", {}, info.inherited ? button("Make specific", { action: "specific" })
         : [button("Inherit from above", { action: "inherit" }), " ",
@@ -430,11 +452,17 @@ async function setValue(module, absno, name, before, value) {
 
 // ---------------------------------------------------------------- clipboard
 
-function clipTake(cut) {
+// Copy takes the current object alone unless `hierarchy`; cut, and a selection,
+// always take what is below.
+function clipTake(cut, hierarchy = cut) {
   const row = needObject(cut);
-  S.clip = { module: S.moduleId, absno: row.absno, id: row.id, cut };
-  say(`${cut ? "Cut" : "Copied"} ${row.id} with its children. Select an object, then Paste.`
-    + (cut ? " It stays where it is until you paste." : ""));
+  const rows = several() ? topRows(chosenRows()).filter((r) => !r.deleted) : [row];
+  if (!rows.length) throw new Error("Nothing here can be copied: the selection is deleted.");
+  const whole = cut || hierarchy || several();
+  const id = rows.length > 1 ? `${rows.length} objects from ${rows[0].id}` : rows[0].id;
+  S.clip = { module: S.moduleId, absnos: rows.map((r) => r.absno), id, cut, hierarchy: whole };
+  say(`${cut ? "Cut" : "Copied"} ${id}${whole ? " with what is below" : " (this object only)"}. Select an object, then Paste.`
+    + (cut ? " Nothing moves until you paste." : ""));
 }
 
 const paste = (where) => act(async () => {
@@ -442,10 +470,11 @@ const paste = (where) => act(async () => {
   if (why) throw new Error(why);
   const row = selectedRow();
   const clip = S.clip;
-  const made = await api("paste_object", { source: { module: clip.module, absno: clip.absno }, module: S.moduleId,
-    ref: row ? row.absno : null, where: row ? where : "end", cut: clip.cut });
+  const made = await api("paste_object", { source: { module: clip.module, absnos: clip.absnos }, module: S.moduleId,
+    ref: row ? row.absno : null, where: row ? where : "end", cut: clip.cut, hierarchy: clip.hierarchy });
   if (clip.cut) S.clip = null;
   clearFilters();
+  S.picks = new Set();
   S.selected = made.absno;
   await refresh();
   reveal(made.absno);
@@ -480,12 +509,21 @@ function purgeDialog() {
 }
 
 function purgeObject() {
-  const row = needObject(true), module = S.moduleId;
-  confirmDialog("Purge object", `Remove ${row.id} for good, with its links? This cannot be undone.`, "Purge", async () => {
-    await api("purge_object", { module, absno: row.absno });
-    S.undo = [];
-    await refresh();
-  });
+  needObject(true);
+  const module = S.moduleId, tops = topRows(chosenRows()).filter((r) => r.deleted);
+  if (!tops.length) throw new Error("Delete it first.");
+  const going = treeRows(tops);
+  const what = tops.length === 1 ? tops[0].id : `${tops.length} objects`;
+  confirmDialog("Purge", `Remove ${what}${going.length > tops.length ? " and everything below" : ""} for good, with their links? `
+    + "This cannot be undone.", "Purge", async () => {
+      try {
+        for (const top of tops) await api("purge_object", { module, absno: top.absno });
+      } finally {
+        S.undo = [];
+        S.picks = new Set();
+        await refresh();
+      }
+    });
 }
 
 // Edit one of the two text attributes in place, whether or not it shows yet.
@@ -514,6 +552,10 @@ function reveal(absno) {
   let hidden = !!S.maxLevel && row.level > S.maxLevel;
   if (hidden) S.maxLevel = 0;
   for (let up = rows.get(row.parent); up; up = rows.get(up.parent)) hidden = S.collapsed.delete(up.absno) || hidden;
+  if (S.outlining && !row.values["Object Heading"]) {
+    S.outlining = false;
+    hidden = true;
+  }
   if (hidden) render();
   select(absno);
   scrollToSelected();
@@ -543,19 +585,21 @@ function tellFind(text) {
 
 async function replaceMatches(all) {
   if (!writable()) throw new Error("The module is read only.");
-  const { text, matchCase, with: to } = S.find;
+  const { text, matchCase, with: to, allText } = S.find;
   if (!text) throw new Error("Type what to find.");
   const module = S.moduleId;
-  const rows = all ? visibleRows() : [selectedRow()].filter(Boolean);
-  const absnos = rows.filter((r) => !r.deleted).map((r) => r.absno);
+  const row = selectedRow();
+  if (!all && !row) throw new Error("Select an object first.");
   const go = async () => {
-    const reply = await api("replace_text", { module, absnos, find: text, replace: to, match_case: matchCase });
+    const reply = await api("replace_text", { module, absnos: all ? null : [row.absno], find: text, replace: to,
+      match_case: matchCase, all_text: !!allText });
     if (reply.changes.length) rememberValues("replacement", module, reply.changes);
     await refresh();
     tellFind(`Replaced ${reply.count} occurrence(s) in ${new Set(reply.changes.map((c) => c.absno)).size} object(s).`);
   };
   if (!all) return go();
-  confirmDialog("Replace all", `Replace "${text}" with "${to}" in the ${absnos.length} object(s) shown?`, "Replace all", go);
+  confirmDialog("Replace all", `Replace "${text}" with "${to}" in ${allText ? "every String and Text attribute" : "Object Heading and Object Text"} `
+    + "of every object in the module, including objects not on screen?", "Replace all", go);
 }
 
 function openFind(replacing) {
@@ -569,9 +613,12 @@ function openFind(replacing) {
     onchange: (e) => { S.find.matchCase = e.target.checked; } });
   const button = (label, work) => h("button", { type: "button", onclick: () => act(work) }, label);
   const close = () => { bar.hidden = true; bar.replaceChildren(); };
+  const within = h("select", { "aria-label": "Replace in", onchange: (e) => { S.find.allText = e.target.value === "all"; } },
+    h("option", { value: "" }, "In heading and text"), h("option", { value: "all" }, "In all text attributes"));
+  within.value = S.find.allText ? "all" : "";
   bar.replaceChildren(input, button("Next", () => findStep(1)), button("Previous", () => findStep(-1)),
     h("label", {}, matchCase, " Match case"),
-    ...(replacing && writable() ? [to, button("Replace", async () => { await replaceMatches(false); }),
+    ...(replacing && writable() ? [to, within, button("Replace", async () => { await replaceMatches(false); }),
       button("Replace all", () => replaceMatches(true))] : []),
     h("span", { class: "found", "aria-live": "polite" }), button("Close", close));
   bar.onkeydown = (e) => {
@@ -583,15 +630,21 @@ function openFind(replacing) {
   input.select();
 }
 
+// A number with a point is a section number, a whole number an absolute number,
+// and anything else an identifier. Only what the view shows can be gone to.
 function goToDialog() {
   needModule();
-  formDialog("Go to", [{ name: "where", label: "ID, absolute number or object number" }], "Go", ({ where }) => {
+  formDialog("Go to", [{ name: "where", label: "Section number (2.1 or 2.), absolute number or ID" }], "Go", ({ where }) => {
     const want = where.trim().toLowerCase();
-    const row = S.data.rows.find((r) => r.id.toLowerCase() === want) || S.data.rows.find((r) => String(r.absno) === want)
-      || S.data.rows.find((r) => r.number.toLowerCase() === want);
+    const row = /^[0-9]+$/.test(want) ? S.data.rows.find((r) => String(r.absno) === want)
+      : /^[0-9]+\.[0-9.-]*$/.test(want) ? S.data.rows.find((r) => r.number.toLowerCase() === want.replace(/\.$/, ""))
+        : S.data.rows.find((r) => r.id.toLowerCase() === want);
     if (!row) throw new Error(`There is no object "${where}" in this module.`);
-    if (!visibleRows().includes(row)) { clearFilters(); S.maxLevel = 0; S.collapsed.clear(); render(); }
-    reveal(row.absno);
+    if (!visibleRows().includes(row)) {
+      throw new Error(`${row.id} is not in the current view: it is filtered out, collapsed, outlined away or below the level shown.`);
+    }
+    select(row.absno);
+    scrollToSelected();
   });
 }
 
@@ -648,14 +701,20 @@ function renderOutline() {
   const draw = (row) => {
     const below = (kids.get(row.absno) || []).flatMap(draw);
     const heading = row.values["Object Heading"];
-    if ((!heading && !below.length) || (shown && !shown.has(row.absno) && !below.length) || count >= OUTLINE_MAX) return [];
+    if ((!heading && !below.length) || count >= OUTLINE_MAX) return [];
     count++;
     const open = !S.outlineClosed.has(row.absno);
     const flip = () => { if (!S.outlineClosed.delete(row.absno)) S.outlineClosed.add(row.absno); renderOutline(); };
     const text = heading || row.values["Object Short Text"] || row.values["Object Text"] || row.id;
-    return [h("div", { class: "node" + (row.absno === S.selected ? " picked" : "") + (row.deleted ? " deleted" : ""),
+    return [h("div", { class: "node" + (row.absno === S.selected ? " picked" : "") + (row.deleted ? " deleted" : "")
+      + (shown && !shown.has(row.absno) ? " excluded" : ""),
       "data-absno": row.absno, title: row.id,
-      onclick: () => { document.body.classList.remove("outline-open"); reveal(row.absno); markOutline(); },
+      onclick: () => {
+        if (shown && !shown.has(row.absno)) return say(`${row.id} is left out by the filter.`);
+        document.body.classList.remove("outline-open");
+        reveal(row.absno);
+        markOutline();
+      },
       oncontextmenu: (e) => {
         e.preventDefault();
         showMenu([M("showInExplorer", () => reveal(row.absno), "", "", "Show object"),
@@ -928,12 +987,7 @@ const extraColumns = () => [...TRACE.columns(), ...redlineColumns()];
 
 const linkToStart = () => act(async () => {
   if (!S.linkStart) throw new Error("First choose Start link.");
-  const row = needObject(true);
-  const { module, id } = S.linkStart;
-  const { note } = await api("create_link", { source: { module: S.moduleId, absno: row.absno }, target_module: module, target: id });
-  await loadTree();
-  await refresh();
-  say(`Linked ${row.id} to ${id}${note ? ". " + note : ""}`);
+  allOrCurrent("Make link to start", (rows) => linkWithStart(rows, false));
 });
 
 function clearLinkStart() {
@@ -942,15 +996,16 @@ function clearLinkStart() {
   say("Link start cleared.");
 }
 
+// The out-links of the current object, or of every selected object.
 function deleteAllLinks() {
-  const row = needObject(true), module = S.moduleId;
-  if (!row.out.length) throw new Error(`${row.id} has no out-links.`);
-  confirmDialog("Delete links", `Delete all ${row.out.length} out-link(s) of ${row.id}?`, "Delete", async () => {
-    try {
-      for (const link of row.out) await api("delete_link", { source: { module, absno: row.absno }, link: link.id });
-    } finally {
-      await refresh();
-    }
+  needObject(true);
+  const module = S.moduleId, rows = chosenRows().filter((r) => r.out.length);
+  const count = rows.reduce((n, r) => n + r.out.length, 0);
+  if (!count) throw new Error("There are no out-links here.");
+  const what = rows.length === 1 ? rows[0].id : `${rows.length} objects`;
+  confirmDialog("Delete links", `Delete all ${count} out-link(s) of ${what}${unseen(rows)}? This cannot be undone.`, "Delete", async () => {
+    await api("delete_out_links", { module, absnos: rows.map((r) => r.absno) });
+    await refresh();
   });
 }
 
@@ -967,7 +1022,8 @@ function linkedEntries(row, only) {
   if (!row) return [M("showLinked", () => {}, "select an object first")];
   const lists = [["out", row.out, "▶"], ["in", row.in, "◀"]].filter(([d]) => !only || d === only);
   const entries = lists.flatMap(([, list, arrow]) => list.map((link) => M("showLinked",
-    () => goTo(link.other.module, link.other.absno), "", "", `${arrow} ${link.other.id} ${link.other.text.slice(0, 50)}`)));
+    () => goTo(link.other.module, link.other.absno), "", "",
+    `${arrow} ${link.other.id} in ${link.other.module_path}: ${link.other.text.slice(0, 40)}`)));
   return entries.length ? entries : [M("showLinked", () => {}, "the object has no links")];
 }
 
@@ -992,6 +1048,8 @@ function showIndicators(incoming, outgoing) {
 function linkByAttributeDialog() {
   const m = needModule();
   const strings = S.data.attributes.filter((a) => a.scope === "object" && (a.base === "String" || a.base === "Text")).map((a) => a.name);
+  const direction = field({ type: "select", options: [["out", "From this module to the target"],
+    ["in", "From the target to this module"], ["both", "Both directions"]] });
   const others = formalModules().filter((n) => n.id !== m.id);
   if (!others.length) throw new Error("There is no other formal module to link to.");
   const attributeName = field({ type: "select", options: strings });
@@ -1001,7 +1059,7 @@ function linkByAttributeDialog() {
   const result = h("div", { "aria-live": "polite" });
   const run = async (preview) => {
     const reply = await api("link_by_attribute", { module: m.id, attribute: attributeName.value,
-      target_module: Number(target.value), link_module: linkModule.value, preview });
+      target_module: Number(target.value), link_module: linkModule.value, direction: direction.value, preview });
     const lines = [`${preview ? "Would make" : "Made"} ${reply.made} link(s); ${reply.existing} already there.`];
     if (reply.refused.length) lines.push(`Refused: ${reply.refused.slice(0, 5).join("; ")}`);
     if (reply.missing.length) lines.push(`Not found in the target module: ${reply.missing.slice(0, 30).join(", ")}${reply.missing.length > 30 ? " ..." : ""}`);
@@ -1013,13 +1071,125 @@ function linkByAttributeDialog() {
     return false;
   };
   dialog("Link by attribute", h("div", {},
-    h("p", {}, "Each object of this module gets out-links to the target objects whose identifiers its attribute lists."),
-    h("div", { class: "form" }, h("label", {}, "Attribute holding identifiers"), attributeName,
-      h("label", {}, "Target module"), target, h("label", {}, "Link module"), linkModule), result), [
+    h("p", {}, "Each object of this module is linked with the target objects its attribute lists: "
+      + "absolute numbers, one per line (or the target's identifiers)."),
+    h("div", { class: "form" }, h("label", {}, "Attribute holding the numbers"), attributeName,
+      h("label", {}, "Target module"), target, h("label", {}, "Link module"), linkModule,
+      h("label", {}, "Link direction"), direction), result), [
     { label: "Preview", primary: true, action: () => run(true) },
     { label: "Make links", action: () => run(false) },
     { label: "Close" },
   ]);
+}
+
+// ---------------------------------------------------------------- copying modules, baseline sets
+
+function copyModuleDialog(node) {
+  formDialog("Copy module " + node.path, [
+    { name: "name", label: "Name of the copy", value: node.name + " copy" },
+    { name: "description", label: "Description", value: node.description },
+  ], "Copy", async (v) => {
+    const made = await api("copy_module", { module: node.id, ...v });
+    await loadTree();
+    await pickItem(made.id);
+    say(`Copied ${node.path}: its objects, views and out-links; not its in-links or baselines.`);
+  });
+}
+
+const tickList = (items, chosen) => {
+  const boxes = items.map(([value]) => h("input", { type: "checkbox", value: String(value), checked: chosen.includes(value) }));
+  return [h("div", { class: "checks" }, items.map(([, label], i) => h("label", {}, boxes[i], " " + label))),
+    () => boxes.filter((b) => b.checked).map((b) => Number(b.value))];
+};
+
+// A definition names modules at or below the folder or project holding it.
+function setDefinitionDialog(definition, done) {
+  const places = [...S.items.values()].filter((n) => (n.kind === "folder" || n.kind === "project") && !n.deleted && n.id !== 1);
+  if (!places.length) throw new Error("There is no folder or project to hold a definition.");
+  const near = containerForNew().id;
+  const folder = field({ type: "select", options: places.map((n) => [n.id, n.path]),
+    value: String(definition ? definition.folder : places.some((n) => n.id === near) ? near : places[0].id) });
+  folder.disabled = !!definition;
+  const name = field({ value: definition?.name }), description = field({ value: definition?.description });
+  const holder = h("div", {});
+  let read = () => [];
+  const draw = () => {
+    const path = places.find((n) => n.id === Number(folder.value)).path;
+    const below = formalModules().filter((n) => n.path.startsWith(path.replace(/\/$/, "") + "/"));
+    let list;
+    [list, read] = tickList(below.map((n) => [n.id, n.path]), definition ? definition.modules.map((m) => m.id) : below.map((n) => n.id));
+    holder.replaceChildren(list);
+  };
+  folder.addEventListener("change", draw);
+  draw();
+  dialog(definition ? "Edit baseline set definition" : "New baseline set definition", h("div", {},
+    h("div", { class: "form" }, h("label", {}, "Held by"), folder, h("label", {}, "Name"), name,
+      h("label", {}, "Description"), description), h("p", {}, "Modules:"), holder), [
+    { label: "OK", primary: true, action: async () => {
+      await api(definition ? "update_set_definition" : "create_set_definition", { folder: Number(folder.value),
+        id: definition?.id, name: name.value, description: description.value, modules: read() });
+      await done();
+    } },
+    { label: "Cancel" },
+  ]);
+}
+
+function baselineSetsDialog() {
+  const holder = h("div", {});
+  let box = null;
+  const draw = async () => {
+    const { definitions } = await api("baseline_sets");
+    holder.replaceChildren(...(definitions.length ? definitions.map(card) : [h("p", {}, "There are no baseline set definitions yet.")]));
+  };
+  const redraw = async () => { await draw(); await refresh(); };
+  const button = (label, work) => h("button", { type: "button", onclick: () => act(async () => work()) }, label);
+  const card = (d) => {
+    const at = { folder: d.folder, id: d.id };
+    const addModules = (set) => {
+      const left = d.modules.filter((m) => !set.members.some((x) => x.module === m.id));
+      if (!left.length) throw new Error("Every module of the definition is in this set.");
+      const [list, read] = tickList(left.map((m) => [m.id, m.path]), left.map((m) => m.id));
+      dialog(`Baseline into ${d.name} ${set.label}`, list, [
+        { label: "Baseline them", primary: true, action: async () => {
+          await api("add_to_baseline_set", { ...at, index: set.index, modules: read() });
+          await redraw();
+        } },
+        { label: "Cancel" },
+      ]);
+    };
+    const rows = d.sets.map((set) => h("tr", {},
+      h("td", {}, set.label, set.annotation ? h("div", { class: "hint" }, set.annotation) : null),
+      h("td", {}, set.open ? "open" : "closed"), h("td", {}, `${set.user}, ${set.date}`),
+      h("td", {}, set.members.map((m) => h("div", {}, button(`${m.path} ${m.label}`, async () => {
+        box.close();
+        S.picked = m.module;
+        await openModule(m.copy);
+        renderTree();
+      })))),
+      h("td", {}, set.open ? [button("Add modules...", () => addModules(set)), " ", button("Close set", () =>
+        confirmDialog("Close baseline set", `Close ${d.name} ${set.label}? Nothing more can be added to it.`, "Close set", async () => {
+          await api("close_baseline_set", { ...at, index: set.index });
+          await redraw();
+        }))] : null)));
+    return h("section", {}, h("h4", {}, `${d.name} (held by ${d.folder_path})`),
+      d.description ? h("p", {}, d.description) : null,
+      h("p", {}, "Modules: " + (d.modules.map((m) => m.path).join(", ") || "none")),
+      h("p", {}, button("Edit...", () => setDefinitionDialog(d, draw)), " ",
+        button("New baseline set...", () => formDialog("New baseline set of " + d.name, [
+          { name: "major", label: "Major version", type: "checkbox" }, { name: "suffix", label: "Suffix (optional)" },
+          { name: "annotation", label: "Annotation", type: "textarea" }], "Create", async (v) => {
+          await api("create_baseline_set", { ...at, ...v });
+          await redraw();
+        })), " ",
+        button("Delete definition", () => confirmDialog("Delete definition", `Delete ${d.name}?`, "Delete", async () => {
+          await api("delete_set_definition", at);
+          await draw();
+        }))),
+      rows.length ? listTable(["Set", "State", "Made", "Baselines (open read-only)", ""], rows) : h("p", {}, "No baseline sets yet."));
+  };
+  box = dialog("Baseline sets", h("div", {}, h("p", {}, button("New definition...", () => setDefinitionDialog(null, draw))), holder));
+  wideBox(box);
+  draw().catch((e) => { box.problem.textContent = e.message; });
 }
 
 // ---------------------------------------------------------------- the link module window
@@ -1126,7 +1296,9 @@ document.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
     // a text selection on the page is still copied as text
     const keys = {
-      f: () => openFind(false), g: () => findStep(e.shiftKey ? -1 : 1), z: undo,
+      f: e.shiftKey ? (S.linkStart ? finishLink : null) : () => openFind(false),
+      m: e.shiftKey && S.linkStart ? linkToStart : null,
+      g: () => findStep(e.shiftKey ? -1 : 1), z: undo,
       c: String(getSelection()) ? null : () => clipTake(false),
       x: String(getSelection()) || !writable() ? null : () => clipTake(true),
       v: S.clip && writable() ? () => paste("after") : null,

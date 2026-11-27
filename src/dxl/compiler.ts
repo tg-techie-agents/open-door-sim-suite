@@ -16,9 +16,7 @@ import { StoreError } from "../store.ts";
 import { OSError, join_path, normpath } from "./files.ts";
 import { Overload, key, same_params } from "./registry.ts";
 import type { Library } from "./registry.ts";
-import {
-  AttrRef, Callback, Ellipsis, Fault, IndexError, OverflowError, Ref, Runtime, Typed, ValueError, compare_text, equals,
-} from "./runtime.ts";
+import { AttrRef, Callback, Ellipsis, Fault, IndexError, OverflowError, Ref, Runtime, Typed, ValueError, compare_text, equals, is_limit } from "./runtime.ts";
 import { DxlError, Parser, RESERVED, TYPES, py_repr } from "./syntax.ts";
 import type { Node } from "./syntax.ts";
 
@@ -998,7 +996,7 @@ export class Compiler {
         run(env);
       } catch (fault: any) {
         if (fault instanceof Fault || fault instanceof StoreError || fault instanceof OSError) {
-          if (rt.trapping) {
+          if (rt.trapping && !is_limit(fault.message)) {
             rt.last_error = fault.message;
             return;
           }

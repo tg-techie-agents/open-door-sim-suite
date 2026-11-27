@@ -323,6 +323,50 @@ function _read_type(entry: any, where: string): Record<string, any> {
   return out;
 }
 
+// Baseline set definitions. A module is written as its path, a baseline as its
+// module's path and version.
+function _written_sets(store: Store): any[] {
+  const kept = (id: number) => store.find(store.path(id)) === id;
+  return store.all_set_definitions().map(([folder, d]) => ({
+    folder: store.path(folder) || "/", name: d.name, description: d.description,
+    modules: d.modules.filter(kept).map((m) => store.path(m)),
+    sets: d.sets.map(({ members, ...set }) => ({ ...set, members: members.flatMap((copy) => {
+      const b = store.baseline_of(copy)!;
+      return kept(b.module_id) ? [{ module: store.path(b.module_id), version: [b.major, b.minor, b.suffix] }] : [];
+    }) })),
+  }));
+}
+
+function _load_sets(store: Store, data: any): void {
+  const found = (path: any) => {
+    const item = store.find(_column(path));
+    if (item === null) throw new StoreError(`baseline sets: nothing at ${path}`);
+    return item;
+  };
+  for (const entry of _iter(_get(data, "baseline_sets", []))) {
+    _only(entry, ["folder", "name", "description", "modules", "sets"], "a baseline set definition");
+    store.restore_set_definition(found(_key(entry, "folder")), {
+      name: _column(_key(entry, "name")), description: _column(_get(entry, "description", "")),
+      modules: _iter(_key(entry, "modules")).map(found),
+      sets: _iter(_key(entry, "sets")).map((set: any) => {
+        _only(set, ["major", "minor", "suffix", "annotation", "open", "user", "date", "members"], "a baseline set");
+        const members = _iter(_key(set, "members")).map((member: any) => {
+          _only(member, ["module", "version"], "a baseline set member");
+          const [major, minor, suffix] = _iter(_key(member, "version"));
+          const baseline = store.baselines(found(_key(member, "module")))
+            .find((b) => b.major === major && b.minor === minor && b.suffix === suffix);
+          if (!baseline) throw new StoreError("baseline sets: a member baseline is not in the file");
+          return baseline.copy_id;
+        });
+        return { major: Number(_key(set, "major")), minor: Number(_key(set, "minor")),
+          suffix: _column(_get(set, "suffix", "")), annotation: _column(_get(set, "annotation", "")),
+          open: Boolean(_key(set, "open")), user: _column(_get(set, "user", "")),
+          date: _column(_get(set, "date", "")), members };
+      }),
+    });
+  }
+}
+
 // The things with access rights of their own (baselines left out).
 function _written_access(store: Store): any[] {
   const out: any[] = [];
@@ -558,6 +602,8 @@ export function dump_project(store: Store): string {
   }
 
   const data: Record<string, any> = { format: FORMAT, version: VERSION, folders, modules, link_modules, links };
+  const baseline_sets = _written_sets(store);
+  if (baseline_sets.length) data.baseline_sets = baseline_sets;
   const access = _written_access(store);
   if (access.length) data.access = access;
   return JSON.stringify(data, null, 2) + "\n";
@@ -591,7 +637,8 @@ export function load_project_data(store: Store, data: any, path: string = "proje
   if (!_is_dict(data) || _get(data, "format") !== FORMAT || !(_numeric(version) && Number(version) === VERSION)) {
     throw new StoreError(`${path} is not a project file ("format": "${FORMAT}", "version": ${VERSION})`);
   }
-  _only(data, ["format", "version", "folders", "modules", "link_modules", "links", "steps", "created_on", "access"],
+  _only(data, ["format", "version", "folders", "modules", "link_modules", "links", "steps", "created_on", "access",
+    "baseline_sets"],
     path);
   try {
     store.transaction(() => _load(store, data));
@@ -615,6 +662,7 @@ function _load(store: Store, data: any): void {
       throw new StoreError(`step ${index + 1}: ${error.message}`);
     }
   });
+  _load_sets(store, data);
   _load_access(store, data);
 }
 

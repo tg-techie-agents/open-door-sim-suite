@@ -22,6 +22,16 @@ function descriptor(rt: Runtime, handle: any): LinkDescriptor {
   return found;
 }
 
+// A descriptor's names come back as they were given; DOORS's choice of name or
+// full path is not documented.
+function bare(name: string, what: string): string {
+  if (name.includes("/")) {
+    throw new Fault(`${what}: this descriptor was given a path, and whether DOORS answers with the path or the `
+      + "name is not documented");
+  }
+  return name;
+}
+
 function register_descriptors(lib: Library): void {
   lib.type("LinkModuleDescriptor");
   lib.loop("Folder", "LinkModuleDescriptor", (rt: Runtime, folder: any) =>
@@ -47,14 +57,6 @@ function register_descriptors(lib: Library): void {
     (rt: Runtime, folder: any, module: any) =>
       rt.store.links_exclusive(rt.need(folder, "Folder"), rt.need(module, "ModName_")));
 
-  // the names come back as they were given; DOORS's choice of name or full path is not documented
-  const bare = (name: string, what: string): string => {
-    if (name.includes("/")) {
-      throw new Fault(`${what}: this descriptor was given a path, and whether DOORS answers with the path or the `
-        + "name is not documented");
-    }
-    return name;
-  };
   for (const [call, field] of [["getName", "linkmod"], ["getSourceName", "source"], ["getTargetName", "target"]] as
     const) {
     lib.add(call, ["LinkModuleDescriptor"], "string",
@@ -68,7 +70,10 @@ function register_descriptors(lib: Library): void {
     lib.add(`get${what}`, ["LinkModuleDescriptor"], "bool",
       (rt: Runtime, handle: any) => descriptor(rt, handle)[field]);
     lib.add(`set${what}`, ["LinkModuleDescriptor", "bool"], "void", (rt: Runtime, handle: any, flag: boolean) => {
-      descriptor(rt, handle);
+      // the manual: the call fails on a descriptor that already is so, whichever value it is given
+      if (descriptor(rt, handle)[field]) {
+        throw new Fault(`set${what}: the descriptor is already ${what.toLowerCase()}, and DOORS fails this call`);
+      }
       rt.store.set_link_descriptor(handle.folder, handle.source, handle.target, { [field]: flag });
     });
   }
@@ -87,7 +92,7 @@ function formal(rt: Runtime, name: string): number {
 function default_name(rt: Runtime, source: number | null, target: number | null): string {
   if (source !== null && target !== null) {
     const covering = rt.store.descriptors_between(source, target);
-    if (covering.length) return covering[0].descriptor.linkmod;
+    if (covering.length) return bare(covering[0].descriptor.linkmod, "getDefaultLinkModule");
   }
   if (rt.store.default_link_name === null) {
     throw new Fault("getDefaultLinkModule: none has been set here, and the name DOORS then answers with is not "

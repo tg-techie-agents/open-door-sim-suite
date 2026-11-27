@@ -8,7 +8,7 @@
 import { RIGHTS, closed_rights } from "../../store.ts";
 import type { AccessEntry } from "../../store.ts";
 import type { Library } from "../registry.ts";
-import { Fault } from "../runtime.ts";
+import { Fault, limit } from "../runtime.ts";
 import type { Ref, Runtime } from "../runtime.ts";
 import { attempt, handle } from "./database.ts";
 
@@ -20,7 +20,7 @@ const WRITE = RIGHTS.modify | RIGHTS.create | RIGHTS.delete;
 function changing(run: () => void): string {
   const message = attempt(run);
   if (message === "" || message.startsWith("no access:")) return message;
-  throw new Fault(message);
+  throw limit(message);
 }
 
 // the store's name for what a handle means, with the module open where it must be
@@ -102,13 +102,8 @@ function register_changes(lib: Library): void {
 function register_records(lib: Library): void {
   lib.type("AccessRec");
   const need = (rt: Runtime, a: any): AccessEntry => rt.need(a, "AccessRec");
-  lib.add("username", ["AccessRec"], "string", (rt: Runtime, a: any) => {
-    const name = need(rt, a).name;
-    if (name === null) {
-      throw new Fault("username of the entry for everyone else is not documented; test isDefault(ar) first");
-    }
-    return name;
-  });
+  // the manual: a null name means the record is the default one
+  lib.add("username", ["AccessRec"], "string", (rt: Runtime, a: any) => need(rt, a).name ?? "");
   lib.add("isDefault", ["AccessRec"], "bool", (rt: Runtime, a: any) => need(rt, a).name === null);
   for (const [call, right] of [["read", "read"], ["create", "create"], ["modify", "modify"], ["delete", "delete"],
     ["control", "control"], ["write", "modify"], ["change", "control"]] as const) {

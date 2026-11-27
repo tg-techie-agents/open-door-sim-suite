@@ -15,6 +15,19 @@ export class Fault extends Error {
 }
 
 /** `halt`: stop the script without an error. */
+/** Does an error message say what this suite cannot settle or does not do,
+ * rather than report something DOORS would report too? noError must not turn
+ * one of these into a lastError() the script carries on from. */
+export function is_limit(message: string): boolean {
+  return /not documented|not verified|not supported|not offered|\bhere\b/.test(message)
+    && !/already exists here|value here$/.test(message);
+}
+
+/** A refusal passed on from elsewhere, worded so that is_limit() knows it. */
+export function limit(message: string): Fault {
+  return new Fault(is_limit(message) ? message : `${message} (what DOORS does then is not offered)`);
+}
+
 export class Halt extends Error {
   constructor() {
     super("");

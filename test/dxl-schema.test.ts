@@ -169,6 +169,7 @@ describe("removal and conversion", () => {
       ModName_ tests = module("/Demo/Test Cases")
       string early = purge(tests)
       if (!null early) print "not yet\\n"
+      if (!hardDelete(tests)) softDelete(tests)
       if (hardDelete(tests)) print "gone " (null tests) "\\n"
       Folder made = create("/Spare", "")
       Project p

@@ -15,6 +15,7 @@
 //
 // What the manual does not settle is refused where it is met rather than guessed.
 
+import { carry_out } from "./pending.ts";
 import type { Library } from "../registry.ts";
 import { Callback, Fault, Halt } from "../runtime.ts";
 import { confirm } from "./core.ts";
@@ -247,6 +248,7 @@ export class DialogSession {
     this.ended = true;
     this.dialogs.stop_progress();
     for (const closer of this.rt.closers) closer();
+    carry_out(this.rt);
   }
 
   /** What is on screen, as plain data. Message boxes are handed over once. */

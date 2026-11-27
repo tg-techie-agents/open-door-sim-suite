@@ -7,14 +7,17 @@
 // The "display set" DOORS loops follow is every object that is not deleted, as
 // filtered and sorted by the script (displayset.ts).
 
+import { invalid_char } from "./setup.ts";
 import { ROOT, StoreError } from "../../store.ts";
 import { assign_own, computing, reset_value } from "../attribute.ts";
 import type { Link, Obj } from "../../store.ts";
-import { Fault, ValueError, equals } from "../runtime.ts";
+import { check_end, check_link, check_new, check_source, flush, link_deleted, live_link, module_saved } from "./pending.ts";
+import { Fault, ValueError, equals, is_limit, limit } from "../runtime.ts";
 import type { AttrRef, Ref, Runtime } from "../runtime.ts";
 import type { Library } from "../registry.ts";
 import { accepted_objects, arranged, sorting, unfiltered_only } from "./displayset.ts";
 import { set_visible } from "./views.ts";
+import { date } from "./management.ts";
 
 export const ITEM_HANDLES = ["Item", "Folder", "Project", "ModName_"]; // may name something closed
 export const NAMED = [...ITEM_HANDLES, "Module"];
@@ -80,7 +83,14 @@ export function split_name(rt: Runtime, name: string): [string, string] {
   const leaf = name.slice(at + 1);
   const parent = head ? find(rt, head) : (slash ? ROOT : rt.folder);
   if (parent === null) throw new Fault(`no folder ${_repr(head)}`);
+  dxl_name(leaf);
   return [rt.store.path(parent), leaf];
+}
+
+/** A name DOORS would not take must not be made here. */
+function dxl_name(name: string): void {
+  const bad = invalid_char(name);
+  if (bad !== "\0") throw new Fault(`${_repr(name)}: DOORS does not allow ${_repr(bad)} in a project, folder, or module name`);
 }
 
 export function item_deleted(rt: Runtime, item_id: number | null): boolean {
@@ -102,7 +112,8 @@ export function attempt(change: () => any): string {
   try {
     change();
   } catch (e) {
-    if (!(e instanceof StoreError)) throw e;
+    // a limit of this suite is no answer of DOORS's: it stops the script
+    if (!(e instanceof StoreError) || is_limit(e.message)) throw e;
     return e.message;
   }
   return "";
@@ -127,7 +138,8 @@ export function in_project(rt: Runtime, module_id: number, project: number): boo
 }
 
 // `purge(x)` and `hardDelete(m)`: gone for good, and the handle becomes null.
-function purge_item(rt: Runtime, ref: Ref, soft_first: boolean): string {
+// Both need it soft-deleted already, as the manual has it.
+function purge_item(rt: Runtime, ref: Ref): string {
   const item_id = rt.need(ref.get(), "handle");
   if (open_modules(rt, () => true).some((m) => m === item_id || rt.store.path(m).startsWith(
     rt.store.path(item_id) + "/"))) {
@@ -136,19 +148,16 @@ function purge_item(rt: Runtime, ref: Ref, soft_first: boolean): string {
   for (let at: number | null = rt.folder; at !== null; at = parent_id(rt, at)) {
     if (at === item_id) throw new Fault("the current folder is inside what would be purged");
   }
-  const message = attempt(() => rt.store.transaction(() => {
-    if (soft_first && !rt.store.item(item_id).deleted) rt.store.delete_item(item_id);
-    rt.store.purge_item(item_id);
-  }));
+  const message = attempt(() => rt.store.purge_item(item_id));
   if (!message) ref.set(null);
   return message;
 }
 
 function register_removal(lib: Library): void {
   for (const type_name of ["Item", "Folder", "Project", "ModName_"]) {
-    lib.add("purge", ["&" + type_name], "string", (rt: Runtime, ref: Ref) => purge_item(rt, ref, false));
+    lib.add("purge", ["&" + type_name], "string", purge_item);
   }
-  lib.add("hardDelete", ["&ModName_"], "bool", (rt: Runtime, ref: Ref) => !purge_item(rt, ref, true));
+  lib.add("hardDelete", ["&ModName_"], "bool", (rt: Runtime, ref: Ref) => !purge_item(rt, ref));
 
   const convert = (rt: Runtime, item_id: any, project: boolean, ref: Ref) => attempt(() => {
     rt.store.set_project(rt.need(item_id, project ? "Folder" : "Project"), project);
@@ -188,8 +197,10 @@ export function register_hierarchy(lib: Library): void {
     lib.add("isDeleted", [t], "bool", on(item_deleted));
     lib.add("undelete", [t], "string", on((rt: Runtime, i: number) => delete_item(rt, i, false)));
     lib.add("rename", [t, "string", "string"], "string",
-      on((rt: Runtime, i: number, name: string, desc: string) =>
-        attempt(() => rt.store.set_item(i, name, desc))));
+      on((rt: Runtime, i: number, name: string, desc: string) => {
+        dxl_name(name);
+        return attempt(() => rt.store.set_item(i, name, desc));
+      }));
     if (t !== "ModName_") lib.add("delete", [t], "string", on(delete_item));
   }
   lib.add("softDelete", ["ModName_"], "bool",
@@ -281,6 +292,7 @@ export function open_as(mode: string) {
         + "mode inside a for loop: open it before the loop, or test open(ModName_) first");
     }
     rt.open(found, mode);
+    if (fresh && mode !== "read" && !rt.store.is_baseline(found)) rt.store.record_session(found);
     set_visible(rt, found, flags[0] !== false, fresh); // the first flag: display
     return found;
   };
@@ -298,6 +310,7 @@ export function close(rt: Runtime, module_id: any, save: boolean | null = null):
     throw new Fault("DOORS would discard the unsaved changes here, but this stand-in has already "
       + "stored them; save() before close()");
   }
+  check_source(rt, module_id, "close");
   rt.opened.delete(module_id);
   if (rt.module === module_id) rt.module = null;
   if (rt.object !== null && rt.object.module_id === module_id) rt.object = null;
@@ -310,6 +323,7 @@ export function save(rt: Runtime, module_id: any): void {
     throw new Fault("the module is open read-only and cannot be saved");
   }
   rt.modified.delete(module_id);
+  module_saved(rt, module_id);
 }
 
 export function create_formal(rt: Runtime, name: string, desc: string, prefix: string, absno: number,
@@ -317,6 +331,7 @@ export function create_formal(rt: Runtime, name: string, desc: string, prefix: s
   if (absno !== 1) throw new Fault("only a starting absolute number of 1 is supported here");
   const [parent, leaf] = split_name(rt, name);
   const made = rt.open(rt.store.create_module(parent, leaf, desc, prefix), "edit");
+  rt.store.record_session(made);
   set_visible(rt, made, display, true);
   return made;
 }
@@ -326,6 +341,20 @@ export function create_link_module(rt: Runtime, name: string, desc: string, mapp
   if (mapping !== MANY_TO_MANY) throw new Fault("only manyToMany link modules are supported here");
   const [parent, leaf] = split_name(rt, name);
   return rt.store.create_link_module(parent, leaf, desc);
+}
+
+// Failing for a taken name or for want of access returns false, as DOORS can
+// only; what this suite cannot copy faithfully stops the script.
+function copy_module(rt: Runtime, m: any, name: string, description: string): boolean {
+  const module: number = rt.need(m, "ModName_");
+  if (rt.modified.has(module)) {
+    throw new Fault("copy: the module has unsaved changes, which DOORS would leave out; save it first");
+  }
+  check_source(rt, module, "copy");
+  dxl_name(name);
+  const message = attempt(() => rt.store.copy_module(module, name, description));
+  if (message === "" || message.startsWith("no access:") || message.endsWith("already exists")) return message === "";
+  throw limit(`copy: ${message}`);
 }
 
 export function register_modules(lib: Library): void {
@@ -341,6 +370,7 @@ export function register_modules(lib: Library): void {
   lib.add("close", ["Module"], "bool", close);
   lib.add("close", ["Module", "bool"], "bool", close);
   lib.add("save", ["Module"], "void", save);
+  lib.add("copy", ["ModName_", "string", "string"], "bool", copy_module);
 
   lib.add("exists", ["ModName_"], "bool", (rt: Runtime, m: any) => !item_deleted(rt, rt.need(m, "ModName_")));
   lib.add("open", ["ModName_"], "bool", (rt: Runtime, m: any) => rt.opened.has(rt.need(m, "ModName_")));
@@ -538,8 +568,24 @@ export function move(rt: Runtime, obj: any, where: Map<string, Obj | null> = new
   }
 }
 
+// The client will not delete an object with a link coming in, and the manual
+// does not say what these calls do with one, or with the objects below one.
+function deletable(rt: Runtime, obj: any, call: string, deleted_too: boolean): void {
+  const name = rt.store.identifier(obj);
+  check_end(rt, obj, false, "*", call);
+  if (rt.store.links(obj, false).length) {
+    throw new Fault(`${call}: ${name} has incoming links, which the DOORS client will not delete; what the DXL `
+      + "call does then is not documented (delete those links and call flushDeletions() first)");
+  }
+  if (rt.store.child_objects(obj.module_id, obj.absno).some((c: Obj) => deleted_too || !rt.store.is_deleted(c))) {
+    throw new Fault(`${call}: ${name} has objects below it, and what DOORS does with them is not documented `
+      + "(delete them first, lowest first)");
+  }
+}
+
 export function soft_delete(rt: Runtime, obj: any): void {
   rt.editing(rt.obj(obj).module_id);
+  deletable(rt, obj, "softDelete", false);
   rt.store.delete_object(obj);
 }
 
@@ -675,6 +721,7 @@ export function register_objects(lib: Library): void {
   lib.add("softDelete", ["Object"], "void", soft_delete);
   lib.add("hardDelete", ["Object"], "void", (rt: Runtime, o: any) => {
     rt.editing(rt.obj(o).module_id);
+    deletable(rt, o, "hardDelete", true);
     rt.store.purge_object(o);
     if (rt.object !== null && equals(rt.object, o)) rt.object = null;
   });
@@ -685,7 +732,7 @@ export function register_objects(lib: Library): void {
   });
   lib.add("undelete", ["Object"], "string", undelete_object);
   lib.add("purgeObjects_", ["Module"], "string", purge_objects);
-  lib.add("flushDeletions", [], "void", (rt: Runtime) => null); // deletions here are immediate
+  lib.add("flushDeletions", [], "void", flush);
 
   // -- selection
   lib.add("setSelection", ["Object"], "void", (rt: Runtime, o: any) => set_selection(rt, o, o));
@@ -752,11 +799,12 @@ export function set_module_value(rt: Runtime, module_id: any, name: string, text
 }
 
 export function get_link_value(rt: Runtime, link: any, name: string): string {
-  rt.need(link, "Link");
+  live_link(rt, link);
   const when = name === "Created On" || name === "Last Modified On" ? 1 : 0;
   if (!["Created By", "Created On", "Last Modified By", "Last Modified On"].includes(name)) {
     throw new Fault(`link attribute ${_repr(name)} is not supported here`);
   }
+  check_link(rt, link, name);
   const info = rt.need(rt.store.link_info(link) ?? null, "Link (it was deleted)");
   if (!name.startsWith("Last")) return info[when];
   const modified = rt.store.link_modified(link);
@@ -850,11 +898,14 @@ export function link_module_for(rt: Runtime, source: any, name: string | null): 
 export function make_link(rt: Runtime, source: any, target: any, name: string | null = null): void {
   rt.obj(source), rt.obj(target);
   rt.editing(source.module_id); // links are stored with their source
-  rt.store.create_link(source, target, link_module_for(rt, source, name));
+  const path = link_module_for(rt, source, name);
+  check_new(rt, source, target, path);
+  rt.store.create_link(source, target, path);
 }
 
 // Incoming links only exist for DXL once their source module is loaded.
 export function links(rt: Runtime, obj: any, name: string, outgoing: boolean): Link[] {
+  check_end(rt, rt.obj(obj), outgoing, name, outgoing ? "->" : "<-");
   const found: Link[] = rt.store.links(rt.obj(obj), outgoing, name);
   return outgoing ? found : found.filter((l) => rt.opened.has(l.source.module_id));
 }
@@ -867,6 +918,7 @@ export function versioned(rt: Runtime, module_id: number): number {
 
 // Every incoming link, loaded or not.
 export function incoming(rt: Runtime, obj: any, name: string, baselines = false): Link[] {
+  check_end(rt, rt.obj(obj), false, name, "<-");
   return rt.store.links(rt.obj(obj), false, name, baselines);
 }
 
@@ -886,7 +938,10 @@ export function loaded(rt: Runtime, obj: Obj): Obj | null {
 export function delete_link(rt: Runtime, link: any): void {
   rt.need(link, "Link");
   rt.editing(link.source.module_id);
+  check_link(rt, link, "delete");
+  live_link(rt, link);
   rt.store.delete_link(link);
+  link_deleted(rt, link);
 }
 
 export function register_links(lib: Library): void {
@@ -925,24 +980,24 @@ export function register_links(lib: Library): void {
 
   for (const [name, end] of [["source", (l: Link) => l.source], ["target", (l: Link) => l.target]] as
     Array<[string, (l: Link) => Obj]>) {
-    const module_of = (rt: Runtime, link: any) => versioned(rt, end(rt.need(link, "Link")).module_id);
+    const module_of = (rt: Runtime, link: any) => versioned(rt, end(live_link(rt, link)).module_id);
 
-    lib.add(name, ["Link"], "Object", (rt: Runtime, l: any) => loaded(rt, end(rt.need(l, "Link"))));
+    lib.add(name, ["Link"], "Object", (rt: Runtime, l: any) => loaded(rt, end(live_link(rt, l))));
     // a LinkRef names where an incoming link comes from without loading it
     for (const kind of name === "source" ? ["Link", "LinkRef"] : ["Link"]) {
       lib.add(name, [kind], "ModName_", module_of);
       lib.add(name, [kind], "string", (rt: Runtime, l: any) => rt.store.item(module_of(rt, l)).name);
-      lib.add(name + "AbsNo", [kind], "int", (rt: Runtime, l: any) => end(rt.need(l, "Link")).absno);
+      lib.add(name + "AbsNo", [kind], "int", (rt: Runtime, l: any) => end(live_link(rt, l)).absno);
       lib.add(name + "Version", [kind], "ModuleVersion",
-        (rt: Runtime, l: any) => end(rt.need(l, "Link")).module_id);
+        (rt: Runtime, l: any) => end(live_link(rt, l)).module_id);
     }
   }
-  lib.add("module", ["Link"], "Module", (rt: Runtime, l: any) => rt.need(l, "Link").link_module);
+  lib.add("module", ["Link"], "Module", (rt: Runtime, l: any) => live_link(rt, l).link_module);
   lib.add("delete", ["Link"], "void", delete_link);
   // an echoed outlink: held by a baseline, to something outside that baseline
   // (there are no baseline sets here)
   lib.add("echo", ["Link"], "bool", (rt: Runtime, l: any) => {
-    const from = rt.need(l, "Link").source.module_id;
+    const from = live_link(rt, l).source.module_id;
     return rt.store.is_baseline(from) && l.target.module_id !== from;
   });
 }
@@ -950,6 +1005,14 @@ export function register_links(lib: Library): void {
 // ModuleVersion: the id of a module or of one of its baselines.
 export function register_versions(lib: Library): void {
   lib.type("ModuleVersion");
+
+  // history sessions: what a script may ask of one is its number, time and user
+  lib.type("HistorySession");
+  lib.loop("Module", "HistorySession", (rt: Runtime, m: any) => rt.store.sessions(rt.opened_module(m)));
+  const session = (rt: Runtime, hs: any) => rt.need(hs, "HistorySession");
+  lib.add("number", ["HistorySession"], "int", (rt: Runtime, hs: any) => session(rt, hs).number);
+  lib.add("who", ["HistorySession"], "string", (rt: Runtime, hs: any) => session(rt, hs).user);
+  lib.add("when", ["HistorySession"], "Date", (rt: Runtime, hs: any) => date(rt, session(rt, hs).date));
 
   const on = (fn: any) => (rt: Runtime, v: any, ...rest: any[]) => fn(rt, rt.need(v, "ModuleVersion"), ...rest);
 

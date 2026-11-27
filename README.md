@@ -139,7 +139,10 @@ dates are already read and written in.
   objects, but there is one user and no groups, and read access cannot be taken
   away. View definitions (`ViewDef`) do not keep a script's filter or sort.
 - In the interface, Help lists what is full, partial, and not offered, and DXL
-  coverage name by name.
+  coverage name by name. Offered there means at least one form works.
+- Baseline sets, module copy, and history sessions work in part; a script stops
+  where the manuals do not say what DOORS would do.
+- One person at a time: no locks or shareable editing.
 - Columns and saved views work, and are shared with the interface. Built-in
   columns have stand-in widths.
 - Text is stored without formatting. `richText()` answers only for one line of
@@ -175,6 +178,12 @@ It refuses rather than guesses, so some scripts DOORS accepts are refused:
 - A day-first slash date such as `23/05/2031` is invalid: slash dates are read
   month first, as in a US locale. Your DOORS may read and print dates differently.
 - `contains()` on a buffer stops where the word starts exactly at the offset.
+- After `delete(link)`, anything that would show whether the link is gone yet
+  stops until `flushDeletions()`; call it before `close` of that module.
+- `softDelete` and `hardDelete` stop on an object with incoming links or with
+  objects below it.
+- Project, folder, and module names take only letters, digits, spaces, periods,
+  underscores, and hyphens.
 - `<?` and `>?` need parentheses when another operator is beside them.
 - `goodFileName()` takes letters, digits, spaces, `_` and `-`; anything else
   stops the script. `itemFromID()` of a deleted item stops it too, and it knows

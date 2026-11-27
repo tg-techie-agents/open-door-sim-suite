@@ -12,6 +12,7 @@ import { Files, OSError, VirtualDisk } from "./files.ts";
 import { DialogSession, open_dialogs, run_steps } from "./lib/dialogs.ts";
 import type { DialogHost } from "./lib/dialogs.ts";
 import { build_library } from "./lib/index.ts";
+import { carry_out, forget } from "./lib/pending.ts";
 import { load_view } from "./lib/views.ts";
 import { name_status } from "./unavailable.ts";
 import type { NameStatus } from "./unavailable.ts";
@@ -158,12 +159,16 @@ export function run(source: string, store: any, out: Out | null = null, open_mod
 
   const env: Env = [new Map(), new Map()];
   let session: DialogSession | null = null;
+  forget(store);
   try {
     guard(() => run_steps(dialogs, steps, env));
     if (dialogs.live()) session = new DialogSession(runtime, dialogs, guard);
   } finally {
     dialogs.stop_progress();
-    if (!session) for (const closer of runtime.closers) closer();
+    if (!session) {
+      for (const closer of runtime.closers) closer();
+      carry_out(runtime); // the script has ended, and its marked links go
+    }
   }
   const result = new RunResult([...runtime.modified].map((m) => store.path(m)).sort(compare_text), dry_run);
   result.dialogs = session;

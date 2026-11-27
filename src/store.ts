@@ -163,6 +163,22 @@ export function rights_names(rights: number): string[] {
   return Object.entries(RIGHTS).filter(([, bit]) => rights & bit).map(([name]) => name);
 }
 
+// Baseline set definitions are held by a folder or project. A baseline set is
+// one round of baselining the modules a definition names.
+export type BaselineSetRow = {
+  major: number; minor: number; suffix: string; annotation: string;
+  open: boolean; user: string; date: string;
+  members: number[]; // the baseline copies in the set
+};
+export type SetDefinition = {
+  id: number; name: string; description: string; modules: number[]; sets: BaselineSetRow[];
+};
+
+function _next_version(last: { major: number; minor: number } | undefined, major: boolean): [number, number] {
+  if (!last) return major ? [1, 0] : [0, 1];
+  return major ? [last.major + 1, 0] : [last.major, last.minor + 1];
+}
+
 export class AttrType extends _Record {
   readonly module_id: number;
   readonly name: string;
@@ -479,6 +495,8 @@ type _ItemRow = {
   // link modules: linksets made before any link was, as [source, target] module ids
   linksets?: [number, number][];
   access?: AccessEntry[]; // own access rights; absent: inherited
+  baseline_sets?: SetDefinition[];
+  sessions?: { user: string; date: string }[]; // each opening for editing, in order
 };
 type _TypeRow = { base: string; vals: string[] } & TypeExtras;
 type _DefRow = { type_name: string; scope: string; multi: number; dflt: string; position: number; dxl?: string }
@@ -633,6 +651,7 @@ export class Store {
   db_path: string;
   user: string;
   default_link_name: string | null; // the user's default link module, if set
+  _conf: Map<string, string | null>; // the configuration area: text, or null for a folder
   _guarded: boolean; // some thing has had access rights of its own
   total_changes: number;
   _depth: number;
@@ -655,6 +674,7 @@ export class Store {
     this.db_path = String(path);
     this.user = user || _user();
     this.default_link_name = null;
+    this._conf = new Map();
     this._guarded = false;
     this.total_changes = 0;
     this._depth = 0;
@@ -942,6 +962,19 @@ export class Store {
   }
 
   // A formal module with the standard types and attributes.
+  // "Start at": the absolute number the first object of a new module takes.
+  set_first_number(module_id: number, first: number): void {
+    this.transaction(() => {
+      this._writable(module_id);
+      const row = this._items.get(module_id);
+      if (!row || row.kind !== "formal" || row.next_absno !== 1) {
+        throw new StoreError("only a module that has never held an object takes a starting number");
+      }
+      if (!Number.isSafeInteger(first) || first < 1) throw new StoreError("the starting number is a whole number from 1");
+      this._update_item(module_id, "next_absno", first);
+    });
+  }
+
   create_module(parent_path: string, name: string, description: string = "", prefix: string = ""): number {
     return this.transaction(() => {
       const module = this._create_item(parent_path, name, "formal", description, prefix);
@@ -2363,6 +2396,48 @@ export class Store {
     return row && row.baseline_of !== null ? this._baseline(row) : null;
   }
 
+  // A module copied beside itself under a new name. Outgoing links are copied,
+  // incoming links and baselines are not. What the manuals leave open (deleted
+  // objects, links inside the module, access rights of its own) stops it.
+  copy_module(module_id: number, name: string, description: string): number {
+    return this.transaction(() => {
+      const row = this._items.get(module_id);
+      if (!row || row.kind !== "formal" || row.baseline_of !== null) {
+        throw new StoreError("only formal modules are copied here");
+      }
+      this._require(row.parent!, RIGHTS.create, "copy a module");
+      if (!name || name.includes("/") || name === "." || name === "..") {
+        throw new StoreError(`not a usable name: ${_repr(name)}`);
+      }
+      if (this._names.get(row.parent!)?.has(name)) throw new StoreError(`${_repr(name)} already exists`);
+      const objects = this.objects(module_id, true);
+      if (objects.some((o) => this.is_deleted(o))) {
+        throw new StoreError("whether a module copy takes deleted objects is not documented: purge them first");
+      }
+      if (row.access || objects.some((o) => this._object_row(o).access)) {
+        throw new StoreError("what access rights a module copy takes is not documented");
+      }
+      const outgoing: _LinkRow[] = [];
+      for (const obj of objects) {
+        for (const id of this._outgoing.get(obj.key) ?? []) outgoing.push(this._links.get(id)!);
+      }
+      if (outgoing.some((link) => link.target_module === module_id)) {
+        throw new StoreError("where a copy of a link inside the module then points is not documented");
+      }
+      const { sessions: _sessions, ...kept } = row;
+      const copy = this._insert_item({
+        ...kept, id: this._max_item + 1, name, description, created_by: this.user, created_on: this.now(),
+      });
+      this._copy_content(module_id, copy);
+      const views = this._data(module_id).views;
+      for (const [view, held] of views) this._put(this._data(copy).views, view, structuredClone(held));
+      for (const link of outgoing.sort((a, b) => a.source_absno - b.source_absno || a.id - b.id)) {
+        this._insert_link({ ...link, id: this._max_link + 1, source_module: copy });
+      }
+      return copy;
+    });
+  }
+
   create_baseline(module_id: number, annotation: string = "", major: boolean = false,
                   suffix: string = ""): Baseline {
     return this.transaction(() => {
@@ -2371,30 +2446,15 @@ export class Store {
       if (item.kind !== "formal") throw new StoreError("only formal modules are baselined");
       this._require(module_id, RIGHTS.modify, "create a baseline");
       const existing = this.baselines(module_id);
-      let number: [number, number];
-      if (!existing.length) {
-        number = major ? [1, 0] : [0, 1];
-      } else {
-        const last = existing[existing.length - 1];
-        number = major ? [last.major + 1, 0] : [last.major, last.minor + 1];
-      }
+      const number = _next_version(existing[existing.length - 1], major);
       const stamp = this.now();
+      const { access: _access, sessions: _sessions, ...frozen } = this._items.get(module_id)!;
       const copy = this._insert_item({
-        ...this._items.get(module_id)!, id: this._max_item + 1, deleted: 0, baseline_of: module_id,
+        ...frozen, id: this._max_item + 1, deleted: 0, baseline_of: module_id,
         major: number[0], minor: number[1], suffix, annotation, created_by: this.user, created_on: stamp,
       });
-      const from = this._data(module_id), to = this._data(copy);
-      for (const [name, row] of from.types) this._put(to.types, name, { ...row, vals: [...row.vals] });
-      for (const [name, row] of from.defs) this._put(to.defs, name, { ...row });
-      for (const [name, value] of from.module_values) this._put(to.module_values, name, value);
-      for (const [absno, row] of from.objects) this._put(to.objects, absno, { ...row });
-      for (const [parent, list] of from.kids) {
-        to.kids.set(parent, list.map((row) => to.objects.get(row.absno)!));
-        this._undo(() => { to.kids.delete(parent); });
-      }
-      for (const [absno, held] of from.values) this._put(to.values, absno, new Map(held));
-      this.total_changes += from.types.size + from.defs.size + from.module_values.size + from.objects.size;
-      for (const held of from.values.values()) this.total_changes += held.size;
+      this._copy_content(module_id, copy);
+      const from = this._data(module_id);
       const copied: _LinkRow[] = [];
       for (const absno of from.objects.keys()) {
         for (const id of this._outgoing.get(`${module_id}:${absno}`) ?? []) copied.push(this._links.get(id)!);
@@ -2409,6 +2469,246 @@ export class Store {
       this._record(module_id, null, "createBaseline", "", "", `${number[0]}.${number[1]}`);
       return this.baseline_of(copy)!;
     });
+  }
+
+  // =====================================================================
+  // History sessions: one for each time a module is opened for editing.
+  // Not counted as a change to the data.
+  // =====================================================================
+
+  record_session(module_id: number): void {
+    this.transaction(() => {
+      const row = this._items.get(module_id);
+      if (!row || row.baseline_of !== null) throw new StoreError("only a current module has history sessions");
+      this._assign(row, "sessions", [...row.sessions ?? [], { user: this.user, date: this.now() }]);
+    });
+  }
+
+  sessions(module_id: number): { number: number; user: string; date: string }[] {
+    return (this._items.get(module_id)?.sessions ?? []).map((s, number) => ({ number, ...s }));
+  }
+
+  // =====================================================================
+  // The configuration area (see dxl/lib/conf.ts)
+  // =====================================================================
+
+  conf_entry(key: string): string | null | undefined {
+    return this._conf.get(key);
+  }
+
+  conf_below(key: string): boolean {
+    return [...this._conf.keys()].some((k) => k.startsWith(key + "/"));
+  }
+
+  set_conf_entry(key: string, text: string | null): void {
+    this.transaction(() => {
+      this._put(this._conf, key, text);
+      this.total_changes += 1;
+    });
+  }
+
+  delete_conf_entry(key: string): void {
+    this.transaction(() => {
+      if (this._drop(this._conf, key)) this.total_changes += 1;
+    });
+  }
+
+  // =====================================================================
+  // Baseline sets
+  // =====================================================================
+
+  // The definitions a folder holds, without modules or baselines since purged.
+  set_definitions(folder_id: number): SetDefinition[] {
+    const held = this._items.get(folder_id)?.baseline_sets ?? [];
+    return held.map((d) => ({ ...d, modules: d.modules.filter((m) => this._items.has(m)),
+      sets: d.sets.map((s) => ({ ...s, members: s.members.filter((m) => this._items.has(m)) })) }));
+  }
+
+  set_definition(folder_id: number, id: number): SetDefinition {
+    const found = this.set_definitions(folder_id).find((d) => d.id === id);
+    if (!found) throw new StoreError("the baseline set definition no longer exists");
+    return found;
+  }
+
+  // every [folder, definition] in the database
+  all_set_definitions(): [number, SetDefinition][] {
+    return [...this._items.values()].filter((row) => row.baseline_sets)
+      .flatMap((row) => this.set_definitions(row.id).map((d): [number, SetDefinition] => [row.id, d]));
+  }
+
+  _change_set_definitions(folder_id: number, change: (held: SetDefinition[]) => void): void {
+    const item = this.item(folder_id);
+    if (item.kind !== "folder" && item.kind !== "project" && folder_id !== ROOT) {
+      throw new StoreError("baseline set definitions are held by a folder or project");
+    }
+    this._writable(folder_id);
+    const held: SetDefinition[] = structuredClone(this._items.get(folder_id)!.baseline_sets ?? []);
+    change(held);
+    this._assign(this._items.get(folder_id)!, "baseline_sets", held.length ? held : undefined);
+    this.total_changes += 1;
+  }
+
+  _in_definition(folder_id: number, id: number, change: (d: SetDefinition) => void): void {
+    this._change_set_definitions(folder_id, (held) => {
+      const found = held.find((d) => d.id === id);
+      if (!found) throw new StoreError("the baseline set definition no longer exists");
+      change(found);
+    });
+  }
+
+  _check_definition(folder_id: number, held: SetDefinition[], id: number, name: string, modules: number[]): void {
+    if (!name || name.includes("/") || name === "." || name === "..") {
+      throw new StoreError(`not a usable name: ${_repr(name)}`);
+    }
+    if (held.some((d) => d.id !== id && d.name === name)) {
+      throw new StoreError(`there is already a baseline set definition called ${_repr(name)}`);
+    }
+    for (const module of modules) {
+      if (this.item(module).kind !== "formal" || this.is_baseline(module)) {
+        throw new StoreError("a baseline set definition names formal modules");
+      }
+      let up: number | null = module;
+      while (up !== null && up !== folder_id) up = this._items.get(up)!.parent;
+      if (up === null && folder_id !== ROOT) {
+        throw new StoreError(`${this.path(module)} is outside the definition's folder, which is not supported here`);
+      }
+    }
+  }
+
+  create_set_definition(folder_id: number, name: string, description: string = "", modules: number[] = []): number {
+    return this.transaction(() => {
+      this._require(folder_id, RIGHTS.create, "create a baseline set definition");
+      let id = 0;
+      this._change_set_definitions(folder_id, (held) => {
+        id = held.reduce((most, d) => Math.max(most, d.id), 0) + 1;
+        this._check_definition(folder_id, held, id, name, modules);
+        held.push({ id, name, description, modules: [...new Set(modules)], sets: [] });
+      });
+      return id;
+    });
+  }
+
+  update_set_definition(folder_id: number, id: number,
+                        wanted: { name: string; description: string; modules: number[] }): void {
+    this.transaction(() => {
+      this._require(folder_id, RIGHTS.modify, "change a baseline set definition");
+      this._change_set_definitions(folder_id, (held) => {
+        const found = held.find((d) => d.id === id);
+        if (!found) throw new StoreError("the baseline set definition no longer exists");
+        this._check_definition(folder_id, held, id, wanted.name, wanted.modules);
+        found.name = wanted.name;
+        found.description = wanted.description;
+        found.modules = [...new Set(wanted.modules)];
+      });
+    });
+  }
+
+  delete_set_definition(folder_id: number, id: number): void {
+    this.transaction(() => {
+      this._require(folder_id, RIGHTS.delete, "delete a baseline set definition");
+      if (this.set_definition(folder_id, id).sets.length) {
+        throw new StoreError("deleting a definition that has baseline sets is not supported here");
+      }
+      this._change_set_definitions(folder_id, (held) => { held.splice(held.findIndex((d) => d.id === id), 1); });
+    });
+  }
+
+  // A new open set: the next major or minor number after the definition's last.
+  create_baseline_set(folder_id: number, id: number, major: boolean, suffix: string = "",
+                      annotation: string = ""): number {
+    return this.transaction(() => {
+      this._require(folder_id, RIGHTS.create, "create a baseline set");
+      let index = 0;
+      this._in_definition(folder_id, id, (d) => {
+        if (d.sets.some((s) => s.open)) throw new StoreError("there is already an open baseline set");
+        const [major_number, minor] = _next_version(d.sets[d.sets.length - 1], major);
+        index = d.sets.length;
+        d.sets.push({ major: major_number, minor, suffix, annotation, open: true, user: this.user,
+          date: this.now(), members: [] });
+      });
+      return index;
+    });
+  }
+
+  _open_set(d: SetDefinition, index: number): BaselineSetRow {
+    const set = d.sets[index];
+    if (!set) throw new StoreError("there is no such baseline set");
+    if (!set.open) throw new StoreError("the baseline set is closed");
+    return set;
+  }
+
+  close_baseline_set(folder_id: number, id: number, index: number): void {
+    this.transaction(() => {
+      this._require(folder_id, RIGHTS.modify, "close a baseline set");
+      this._in_definition(folder_id, id, (d) => { this._open_set(d, index).open = false; });
+    });
+  }
+
+  // Baseline modules into an open set. DOORS' version for such a baseline is
+  // not documented, so it is only done where the set's number and the module's
+  // own next number agree.
+  add_to_baseline_set(folder_id: number, id: number, index: number, modules: number[]): void {
+    this.transaction(() => {
+      this._require(folder_id, RIGHTS.modify, "add to a baseline set");
+      this._in_definition(folder_id, id, (d) => {
+        const set = this._open_set(d, index);
+        const present = new Set(set.members.map((m) => this._items.get(m)?.baseline_of));
+        for (const module of modules) {
+          if (!d.modules.includes(module)) {
+            throw new StoreError(`${this.path(module)} is not in the baseline set definition`);
+          }
+          if (present.has(module)) throw new StoreError(`${this.path(module)} is already in the baseline set`);
+          present.add(module);
+        }
+        for (const module of modules) {
+          if (set.suffix) {
+            throw new StoreError("whether the baselines in a set with a suffix take that suffix is not documented, "
+              + "so adding to such a set is not supported here");
+          }
+          const existing = this.baselines(module);
+          const major = set.minor === 0 && set.major > 0;
+          const [own_major, own_minor] = _next_version(existing[existing.length - 1], major);
+          if (own_major !== set.major || own_minor !== set.minor) {
+            throw new StoreError(`${this.path(module)}: its own next baseline would be ${own_major}.${own_minor} and `
+              + `the set is ${set.major}.${set.minor}; which number DOORS gives is not documented`);
+          }
+          set.members.push(this.create_baseline(module, "", major, "").copy_id);
+        }
+      });
+    });
+  }
+
+  // the set holding a baseline, if any
+  baseline_set_of(copy_id: number): { folder: number; id: number; index: number } | null {
+    for (const [folder, d] of this.all_set_definitions()) {
+      const index = d.sets.findIndex((s) => s.members.includes(copy_id));
+      if (index >= 0) return { folder, id: d.id, index };
+    }
+    return null;
+  }
+
+  // A definition with its sets, as a file being loaded gives it.
+  restore_set_definition(folder_id: number, definition: Omit<SetDefinition, "id">): void {
+    this.transaction(() => {
+      const id = this.create_set_definition(folder_id, definition.name, definition.description, definition.modules);
+      this._in_definition(folder_id, id, (d) => { d.sets = structuredClone(definition.sets); });
+    });
+  }
+
+  // types, definitions, module values and objects with their values
+  _copy_content(source: number, copy: number): void {
+    const from = this._data(source), to = this._data(copy);
+    for (const [name, row] of from.types) this._put(to.types, name, { ...row, vals: [...row.vals] });
+    for (const [name, row] of from.defs) this._put(to.defs, name, { ...row });
+    for (const [name, value] of from.module_values) this._put(to.module_values, name, value);
+    for (const [absno, row] of from.objects) this._put(to.objects, absno, { ...row });
+    for (const [parent, list] of from.kids) {
+      to.kids.set(parent, list.map((row) => to.objects.get(row.absno)!));
+      this._undo(() => { to.kids.delete(parent); });
+    }
+    for (const [absno, held] of from.values) this._put(to.values, absno, new Map(held));
+    this.total_changes += from.types.size + from.defs.size + from.module_values.size + from.objects.size;
+    for (const held of from.values.values()) this.total_changes += held.size;
   }
 
   // Differences between two versions of a module (usually a baseline and
@@ -2481,6 +2781,7 @@ export class Store {
       seq: this._seq,
       max_item: this._max_item,
       ...(this.default_link_name === null ? {} : { default_link_module: this.default_link_name }),
+      ...(this._conf.size ? { conf: [...this._conf] } : {}),
       items: [...this._items.values()],
       modules: [...this._modules].map(([id, m]) => ({
         id,
@@ -2541,6 +2842,7 @@ export class Store {
     store._seq = data.seq;
     store._max_item = Math.max(store._max_item, data.max_item ?? 0);
     store.default_link_name = data.default_link_module ?? null;
+    store._conf = new Map(data.conf ?? []);
     store._guarded = [...store._items.values(), ...[...store._modules.values()].flatMap((m) => [...m.objects.values()])]
       .some((row) => row.access !== undefined);
     store.total_changes = 0;

@@ -48,7 +48,7 @@ export const TYPES: Set<string> = new Set(["int", "string", "bool", "char", "rea
   "Object", "Module", "Link", "LinkRef", "ModName_", "Stream", "AttrDef", "AttrType",
   "Buffer", "Skip", "Regexp", "Date", "Range", "Folder", "Project", "Item",
   "Baseline", "History", "HistoryType", "AttrBaseType", "View", "Column", "Filter", "Sort", "Array",
-  "LinkFilter", "ModuleVersion", "Justification", "Stat", "Locale", "LinkModuleDescriptor", "Linkset", "Permission", "AccessRec",
+  "LinkFilter", "ModuleVersion", "Justification", "Stat", "Locale", "LinkModuleDescriptor", "Linkset", "Permission", "AccessRec", "BaselineSetDefinition", "BaselineSet", "HistorySession", "ConfType", "ConfStream",
   "ViewDef",
   "DB", "DBE", "Icon", "Sensitivity"]);
 // Reserved by the manual; none may name a variable or function.

@@ -17,6 +17,7 @@ export const MAX_OUTPUT = 2 * 1024 * 1024;
 // A column is one short cell per object, shown a screenful at a time: a large
 // module's traceability column is far more text than a script should print.
 export const MAX_COLUMN = 32 * 1024 * 1024;
+const MAX_PAIRS = 20000;
 
 export type Scripts = { names: Record<string, string>; layout: Record<string, string> };
 
@@ -108,9 +109,24 @@ export class Api {
     return { root: node(this.store.item(ROOT)), database: this.database };
   }
 
-  op_create_item({ parent, name, kind, description = "", prefix = "" }: any): any {
+  // The characters DOORS allows in the name of a project, folder or module.
+  _name(name: unknown): string {
+    if (typeof name !== "string" || !/^[\p{L}\p{N} ._-]+$/u.test(name)) {
+      throw new StoreError("a name holds letters, numbers, spaces, periods, underscores and hyphens, as in DOORS");
+    }
+    return name;
+  }
+
+  op_create_item({ parent, name, kind, description = "", prefix = "", start = "" }: any): any {
     const path = this.store.path(int(parent));
-    if (kind === "formal") return { id: this.store.create_module(path, name, description, prefix) };
+    this._name(name);
+    if (kind === "formal") {
+      return this.store.transaction(() => {
+        const id = this.store.create_module(path, name, description, prefix);
+        if (String(start).trim()) this.store.set_first_number(id, Number(start));
+        return { id };
+      });
+    }
     if (kind === "link") return { id: this.store.create_link_module(path, name, description) };
     if (kind === "folder" || kind === "project") {
       return { id: this.store.create_folder(path, name, description, kind === "project") };
@@ -119,6 +135,8 @@ export class Api {
   }
 
   op_update_item({ id, name = null, description = null, prefix = null }: any): void {
+    // a name that is not changing is left as it is, whatever made it
+    if (name !== null && name !== this.store.item(int(id)).name) this._name(name);
     this.store.set_item(int(id), name, description, prefix);
   }
 
@@ -223,7 +241,7 @@ export class Api {
 
   static _baseline(b: any): any {
     return {
-      id: b.copy_id, label: b.label, annotation: b.annotation,
+      id: b.copy_id, label: b.label, annotation: b.annotation, major: b.major, minor: b.minor,
       created_by: b.created_by, created_on: b.created_on,
     };
   }
@@ -284,26 +302,117 @@ export class Api {
     if (made_own.length) return { made_own };
   }
 
-  op_move_object({ module, absno, direction }: any): void {
-    const store = this.store;
-    const obj = this._existing(module, absno);
-    const parent = store.parent_object(obj);
-    const siblings: Obj[] = Array.from(store.child_objects(obj.module_id, parent ? parent.absno : null) as Iterable<Obj>)
-      .filter((o) => o.equals(obj) || !store.is_deleted(o));
-    const at = siblings.findIndex((o) => o.equals(obj));
-    if (direction === "up" && at > 0) store.move_object(obj, undefined, undefined, siblings[at - 1]);
-    else if (direction === "down" && at < siblings.length - 1) store.move_object(obj, undefined, siblings[at + 1]);
-    else if (direction === "promote" && parent) store.move_object(obj, undefined, parent);
-    else if (direction === "demote" && at > 0) store.move_object(obj, siblings[at - 1]);
-    else throw new StoreError(`${store.identifier(obj)} cannot move ${direction} from here`);
+  // The objects named, each followed by everything below it, deleted ones included.
+  _trees(module: number, absnos: number[]): Obj[] {
+    const found: Obj[] = [], seen = new Set<number>();
+    const walk = (obj: Obj) => {
+      if (seen.has(obj.absno)) return;
+      seen.add(obj.absno);
+      found.push(obj);
+      this.store.child_objects(obj.module_id, obj.absno).forEach(walk);
+    };
+    for (const absno of absnos) walk(this._existing(module, absno));
+    return found;
   }
 
-  op_delete_object({ module, absno }: any): void {
-    this.store.delete_object(this._existing(module, absno));
+  op_move_object({ module, absno, direction }: any): void {
+    this.op_move_objects({ module, absnos: [absno], direction });
+  }
+
+  // Neighbours at one level, moved as a block: one place up or down, out a level
+  // or in a level. Deleted objects among them stay where they are.
+  op_move_objects({ module, absnos, direction }: any): void {
+    const store = this.store;
+    store.transaction(() => {
+      const named: Obj[] = absnos.map((a: number) => this._existing(module, a));
+      const tops = named.filter((o) => !store.is_deleted(o));
+      if (!tops.length) throw new StoreError("a deleted object cannot be moved");
+      const parent = store.parent_object(tops[0]);
+      const siblings = store.child_objects(tops[0].module_id, parent ? parent.absno : null).filter((o) => !store.is_deleted(o));
+      const places = tops.map((t) => siblings.findIndex((o) => o.equals(t))).sort((a, b) => a - b);
+      const first = places[0], last = places[places.length - 1];
+      if (first < 0 || last - first !== places.length - 1) throw new StoreError("only neighbours at one level move together");
+      const run = siblings.slice(first, last + 1);
+      if (direction === "up" && first > 0) store.move_object(siblings[first - 1], undefined, run[run.length - 1]);
+      else if (direction === "down" && last < siblings.length - 1) store.move_object(siblings[last + 1], undefined, undefined, run[0]);
+      else if (direction === "demote" && first > 0) for (const top of run) store.move_object(top, siblings[first - 1]);
+      else if (direction === "promote" && parent) for (const top of [...run].reverse()) store.move_object(top, undefined, parent);
+      else throw new StoreError(`${store.identifier(run[0])} cannot move ${direction} from here`);
+    });
+  }
+
+  // As Edit, Object, Delete does it: the objects and everything below them, and
+  // refused while any of them still has a link coming in.
+  op_delete_object({ module, absno }: any): { deleted: number[] } {
+    return this.op_delete_objects({ module, absnos: [absno] });
+  }
+
+  op_delete_objects({ module, absnos }: any): { deleted: number[] } {
+    const store = this.store;
+    return store.transaction(() => {
+      const going = this._trees(int(module), absnos).filter((o) => !store.is_deleted(o));
+      if (!going.length) throw new StoreError("already deleted");
+      const linked = going.filter((o) => store.links(o, false).length);
+      if (linked.length) {
+        const named = linked.slice(0, 4).map((o) => `${store.identifier(o)} (from ${
+          store.links(o, false).slice(0, 3).map((l) => store.identifier(l.source)).join(", ")})`);
+        throw new StoreError(`delete the in-links first: ${named.join("; ")}${linked.length > 4 ? ` and ${linked.length - 4} more` : ""}`);
+      }
+      for (const obj of [...going].reverse()) store.delete_object(obj);
+      return { deleted: going.map((o) => o.absno) };
+    });
   }
 
   op_undelete_object({ module, absno }: any): void {
     this.store.undelete_object(this._existing(module, absno));
+  }
+
+  // `absnos` list parents before their children, as delete_objects returns them.
+  op_undelete_objects({ module, absnos }: any): { count: number } {
+    const store = this.store;
+    return store.transaction(() => {
+      const back: Obj[] = absnos.map((a: number) => this._existing(module, a)).filter((o: Obj) => store.is_deleted(o));
+      for (const obj of back) store.undelete_object(obj);
+      return { count: back.length };
+    });
+  }
+
+  // One attribute set on several objects. For a multi-valued enumeration `add`
+  // and `remove` change those choices and leave each object's others alone.
+  // `changes` can be given to restore_values; an inherited cell that now holds a
+  // value of its own is not among them, as that cannot be undone.
+  op_set_value_many({ module, absnos, name, value = null, add = null, remove = null }: any): any {
+    const store = this.store;
+    const id = this._formal(module).id;
+    const definition = store.attribute(id, name);
+    if (!definition) throw new StoreError(`there is no attribute '${name}'`);
+    if (definition.dxl) throw new StoreError(`${name} is calculated by attribute DXL`);
+    const choosing = add !== null || remove !== null;
+    if (choosing && !definition.multi) throw new StoreError(`${name} holds one value`);
+    if (!choosing && typeof value !== "string") throw new StoreError(`${name}: the value must be text`);
+    const changes: Array<{ absno: number; name: string; before: string; after: string }> = [];
+    let changed = 0, made_own = 0, deleted = 0;
+    store.transaction(() => {
+      for (const absno of absnos) {
+        const obj = this._existing(id, absno);
+        if (store.is_deleted(obj)) { deleted++; continue; }
+        const before = store.value(obj, name);
+        let next = choosing ? "" : value.replaceAll("\r\n", "\n");
+        if (choosing) {
+          const held = new Set(before.split("\n").filter(Boolean));
+          for (const v of remove ?? []) held.delete(v);
+          for (const v of add ?? []) held.add(v);
+          next = definition.values.filter((v: string) => held.has(v)).join("\n");
+        }
+        if (next === before) continue;
+        const inherited = this._inherited(obj, name);
+        store.set_value(obj, name, next);
+        changed++;
+        if (inherited) made_own++;
+        else changes.push({ absno: obj.absno, name, before, after: store.value(obj, name) });
+      }
+    });
+    return { changed, made_own, deleted, changes };
   }
 
   op_history({ module, absno = null }: any): any {
@@ -329,6 +438,100 @@ export class Api {
     return { note: made ? `Made the link module ${this.store.path(made)} for this link.` : null };
   }
 
+  // Do `work`, or with `preview` do it and undo it, so that the answer says what
+  // the real thing would do and refuse.
+  _preview<T>(preview: boolean, work: () => T): T {
+    const undo = new Error("preview");
+    let result!: T;
+    try {
+      this.store.transaction(() => {
+        result = work();
+        if (preview) throw undo;
+      });
+    } catch (e) {
+      if (e !== undo) throw e;
+    }
+    return result;
+  }
+
+  // A link from every source to every target, as one change. A pair already
+  // linked through the link module used is left; what is refused is named.
+  op_create_links({ sources, targets, link_module = null, preview = false }: any): any {
+    const store = this.store;
+    const from: Obj[] = sources.map((s: any) => this._existing(s.module, s.absno));
+    const to: Obj[] = targets.map((t: any) => this._existing(t.module, t.absno));
+    if (from.length * to.length > MAX_PAIRS) {
+      throw new StoreError(`that is ${from.length * to.length} pairs; at most ${MAX_PAIRS} are linked at once here`);
+    }
+    return this._preview(preview, () => {
+      const refused = new Set<string>();
+      let made = 0, existing = 0;
+      for (const start of from) {
+        const had = new Set(store.links(start, true).map((l) => l.id));
+        for (const end of to) {
+          if (start.equals(end)) continue;
+          try {
+            if (had.has(store.create_link(start, end, link_module || null).id)) existing++;
+            else made++;
+          } catch (e) {
+            if (!(e instanceof StoreError)) throw e;
+            refused.add(e.message);
+          }
+        }
+      }
+      return { made, existing, refused: [...refused] };
+    });
+  }
+
+  // The links from any source to any target through one link module.
+  op_delete_links_between({ sources, targets, link_module, preview = false }: any): { count: number } {
+    const store = this.store;
+    const ends = new Set(targets.map((t: any) => this._existing(t.module, t.absno).key));
+    return this._preview(preview, () => {
+      let count = 0;
+      for (const s of sources) {
+        for (const link of store.links(this._existing(s.module, s.absno), true)) {
+          if (!ends.has(link.target.key) || store.path(link.link_module) !== link_module) continue;
+          store.delete_link(link);
+          count++;
+        }
+      }
+      return { count };
+    });
+  }
+
+  // Every link into or out of the objects of a module.
+  op_delete_all_links({ module, preview = false }: any): { out: number; in: number } {
+    const store = this.store;
+    const id = this._formal(module).id;
+    return this._preview(preview, () => {
+      const counts = { out: 0, in: 0 };
+      for (const outgoing of [true, false]) {
+        for (const obj of store.objects(id)) {
+          for (const link of store.links(obj, outgoing)) {
+            store.delete_link(link);
+            counts[outgoing ? "out" : "in"]++;
+          }
+        }
+      }
+      return counts;
+    });
+  }
+
+  op_delete_out_links({ module, absnos }: any): { count: number } {
+    const store = this.store;
+    return store.transaction(() => {
+      let count = 0;
+      for (const absno of absnos) {
+        for (const link of store.links(this._existing(module, absno), true)) {
+          store.delete_link(link);
+          count++;
+        }
+      }
+      return { count };
+    });
+  }
+
   _link(source: any, link_id: unknown): any {
     const obj = this._existing(source.module, source.absno);
     if (this.store.is_baseline(obj.module_id)) throw new StoreError("a baseline cannot be changed");
@@ -348,23 +551,27 @@ export class Api {
 
   // -- editing more than one thing at once ----------------------------------
 
-  // Move (cut) or copy an object with its children, after `ref`, below it, or at the end.
-  op_paste_object({ source, module: module_arg, ref = null, where = "end", cut = false }: any): any {
+  // Move (cut) or copy objects after `ref`, below it, or at the end. `source`
+  // names one object (`absno`) or neighbours (`absnos`); a copy takes what is
+  // below them unless `hierarchy` is false.
+  op_paste_object({ source, module: module_arg, ref = null, where = "end", cut = false, hierarchy = true }: any): any {
     const store = this.store;
     const module = this._formal(module_arg).id;
-    const from = this._existing(source.module, source.absno);
-    if (store.is_deleted(from)) throw new StoreError(`${store.identifier(from)} is deleted`);
+    const from: Obj[] = (source.absnos ?? [source.absno]).map((a: number) => this._existing(source.module, a));
+    for (const obj of from) if (store.is_deleted(obj)) throw new StoreError(`${store.identifier(obj)} is deleted`);
     const place = ref === null ? null : this._existing(module, ref);
     const parent = place && where === "child" ? place : null;
     const after = place && where !== "child" ? place : null;
     if (cut) {
-      if (from.module_id !== module) throw new StoreError("a cut object moves within its own module; use Copy to put it in another");
-      store.move_object(from, parent, after);
-      return { absno: from.absno, count: 1, skipped: [] };
+      if (from.some((o) => o.module_id !== module)) throw new StoreError("a cut object moves within its own module; use Copy to put it in another");
+      store.transaction(() => {
+        from.forEach((obj, i) => store.move_object(obj, i ? null : parent, i ? from[i - 1] : after));
+      });
+      return { absno: from[0].absno, count: from.length, skipped: [] };
     }
-    // Read the whole branch first: it may be pasted inside itself.
+    // Read everything first: it may be pasted inside itself.
     const known = new Map(store.attributes(module).map((a) => [a.name, a]));
-    const values: any = store.values(from.module_id, true); // inherited values stay inherited
+    const values: any = store.values(from[0].module_id, true); // inherited values stay inherited
     const skipped = new Set<string>();
     type Branch = { values: Map<string, string>; children: Branch[] };
     const read = (obj: Obj): Branch => {
@@ -375,9 +582,9 @@ export class Api {
         if (!target || (target.base === "Enumeration" && !value.split("\n").every((v) => target.values.includes(v)))) skipped.add(name);
         else held.set(name, value);
       }
-      return { values: held, children: store.child_objects(obj.module_id, obj.absno).filter((o) => !store.is_deleted(o)).map(read) };
+      return { values: held, children: !hierarchy ? [] : store.child_objects(obj.module_id, obj.absno).filter((o) => !store.is_deleted(o)).map(read) };
     };
-    const branch = read(from);
+    const branches = from.map(read);
     let count = 0;
     return store.transaction(() => {
       const make = (node: Branch, up: Obj | null, behind: Obj | null): Obj => {
@@ -386,21 +593,35 @@ export class Api {
         for (const child of node.children) make(child, made, null);
         return made;
       };
-      const top = make(branch, parent, after);
-      return { absno: top.absno, count, skipped: [...skipped] };
+      let first: Obj | null = null, last: Obj | null = null;
+      for (const branch of branches) {
+        last = make(branch, last ? null : parent, last ?? after);
+        first ??= last;
+      }
+      return { absno: first!.absno, count, skipped: [...skipped] };
     });
   }
 
-  // The text moves into a new first child, leaving the heading by itself.
-  op_split_heading({ module, absno }: any): void {
+  // A new object takes the heading and the place; this object, with its text and
+  // links, becomes its first child, and this object's children follow it there.
+  op_split_heading({ module, absno }: any): { absno: number } {
     const store = this.store;
     const obj = this._existing(module, absno);
-    const heading = store.value(obj, "Object Heading"), text = store.value(obj, "Object Text");
-    if (!heading || !text) throw new StoreError(`${store.identifier(obj)} needs both a heading and text to split them`);
-    store.transaction(() => {
-      const first = store.child_objects(obj.module_id, obj.absno)[0];
-      store.create_object(obj.module_id, first ? null : obj, null, first ?? null, new Map([["Object Text", text]]));
-      store.set_value(obj, "Object Text", "");
+    const heading = store.value(obj, "Object Heading");
+    if (!heading || !store.value(obj, "Object Text")) {
+      throw new StoreError(`${store.identifier(obj)} needs both a heading and text to split them`);
+    }
+    return store.transaction(() => {
+      const made = store.create_object(obj.module_id, null, null, obj, new Map([["Object Heading", heading]]));
+      const kids = store.child_objects(obj.module_id, obj.absno);
+      store.set_value(obj, "Object Heading", "");
+      store.move_object(obj, made);
+      let last = obj;
+      for (const kid of kids) {
+        store.move_object(kid, null, last);
+        last = kid;
+      }
+      return { absno: made.absno };
     });
   }
 
@@ -422,16 +643,19 @@ export class Api {
   }
 
   // Plain-text replacement in the String and Text attributes of the objects named.
-  op_replace_text({ module: module_arg, absnos, find, replace, match_case = false }: any): any {
+  // Replaces in Object Heading and Object Text, or with `all_text` in every
+  // String and Text attribute; without `absnos`, in every object of the module.
+  op_replace_text({ module: module_arg, absnos = null, find, replace, match_case = false, all_text = false }: any): any {
     const store = this.store;
     const module = this._formal(module_arg).id;
     if (typeof find !== "string" || !find) throw new StoreError("type what to find");
     const pattern = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), match_case ? "g" : "gi");
-    const names = store.attributes(module).filter((a) => !a.dxl && (a.base === "String" || a.base === "Text")).map((a) => a.name);
+    const names = store.attributes(module).filter((a) => !a.dxl && (a.base === "String" || a.base === "Text")
+      && (all_text || a.name === "Object Heading" || a.name === "Object Text")).map((a) => a.name);
     const changes: Array<{ absno: number; name: string; before: string; after: string }> = [];
     let count = 0;
     store.transaction(() => {
-      for (const absno of absnos) {
+      for (const absno of absnos ?? store.objects(module).map((o) => o.absno)) {
         const obj = this._existing(module, absno);
         for (const name of names) {
           if (this._inherited(obj, name)) continue; // replaced where it is held
@@ -479,10 +703,16 @@ export class Api {
     this.store.modify_attribute(this._formal(module).id, name, changes);
   }
 
-  op_purge_object({ module, absno }: any): void {
+  // A deleted object and everything below it, gone for good.
+  op_purge_object({ module, absno }: any): { purged: number } {
+    const store = this.store;
     const obj = this._existing(module, absno);
-    if (!this.store.is_deleted(obj)) throw new StoreError(`delete ${this.store.identifier(obj)} first`);
-    this.store.purge_object(obj);
+    if (!store.is_deleted(obj)) throw new StoreError(`delete ${store.identifier(obj)} first`);
+    return store.transaction(() => {
+      const going = this._trees(obj.module_id, [obj.absno]);
+      for (const each of [...going].reverse()) store.purge_object(each);
+      return { purged: going.length };
+    });
   }
 
   op_purge_item({ id }: any): void {
@@ -524,7 +754,9 @@ export class Api {
   // -- links in bulk --------------------------------------------------------
 
   // Out-links from each object to the target objects whose identifiers its attribute lists.
-  op_link_by_attribute({ module: module_arg, attribute, target_module, link_module = null, preview = true }: any): any {
+  // The attribute lists objects of the target module, by absolute number or by
+  // identifier. `direction` is from this module ("out"), to it ("in"), or "both".
+  op_link_by_attribute({ module: module_arg, attribute, target_module, link_module = null, preview = true, direction = "out" }: any): any {
     const store = this.store;
     const module = this._formal(module_arg).id;
     const target = this._formal(target_module).id;
@@ -532,11 +764,14 @@ export class Api {
     if (!store.has_attribute(module, attribute)) throw new StoreError(`there is no attribute '${attribute}'`);
     const prefix = store.prefix(target);
     const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // With no prefix, only a list of bare numbers is read: other digits are not identifiers.
+    if (!["out", "in", "both"].includes(direction)) throw new StoreError("choose a link direction");
+    // A value that is only numbers lists absolute numbers. In other text, only
+    // the target's identifiers are read: other digits are not references.
     const listed = (text: string): string[] => {
-      if (prefix) return [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escaped}[0-9]+(?![A-Za-z0-9_])`, "g"))].map((m) => m[0]);
       const parts = text.split(/[\s,;]+/).filter(Boolean);
-      return parts.every((p) => /^[0-9]+$/.test(p)) ? parts : [];
+      if (parts.every((p) => /^[0-9]+$/.test(p))) return parts;
+      if (!prefix) return [];
+      return [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escaped}[0-9]+(?![A-Za-z0-9_])`, "g"))].map((m) => m[0]);
     };
     const missing = new Set<string>(), refused = new Set<string>();
     let made = 0, existing = 0;
@@ -546,17 +781,19 @@ export class Api {
       store.transaction(() => {
         for (const obj of store.objects(module)) {
           for (const name of new Set(listed(store.value(obj, attribute)))) {
-            const end = store.by_identifier(target, name);
-            if (end === null || store.is_deleted(end)) { missing.add(name); continue; }
-            const held = store.links(obj, true).some((l) => l.target.equals(end)
-              && (!path || store.path(l.link_module) === path));
-            if (held) { existing++; continue; }
-            try {
-              store.create_link(obj, end, path);
-              made++;
-            } catch (e) {
-              if (!(e instanceof StoreError)) throw e;
-              refused.add(e.message);
+            const other = /^[0-9]+$/.test(name) ? store.object(target, Number(name)) : store.by_identifier(target, name);
+            if (other === null || store.is_deleted(other)) { missing.add(name); continue; }
+            for (const [start, end] of [...(direction !== "in" ? [[obj, other]] : []), ...(direction !== "out" ? [[other, obj]] : [])]) {
+              const held = store.links(start, true).some((l) => l.target.equals(end)
+                && (!path || store.path(l.link_module) === path));
+              if (held) { existing++; continue; }
+              try {
+                store.create_link(start, end, path);
+                made++;
+              } catch (e) {
+                if (!(e instanceof StoreError)) throw e;
+                refused.add(e.message);
+              }
             }
           }
         }
@@ -645,6 +882,74 @@ export class Api {
   }
 
   // -- what of DXL is here --------------------------------------------------
+
+  // -- opening, copying modules, baseline sets -------------------------------
+
+  // A history session starts each time a module is opened for editing.
+  op_record_session({ module }: any): void {
+    this.store.record_session(this._formal(module).id);
+  }
+
+  op_copy_module({ module, name, description = "" }: any): { id: number } {
+    return { id: this.store.copy_module(this._formal(module).id, this._name(String(name).trim()), String(description)) };
+  }
+
+  // Every baseline set definition, with its sets and the baselines in them.
+  op_baseline_sets(_args: any = {}): any {
+    const store = this.store;
+    return {
+      definitions: store.all_set_definitions().map(([folder, d]) => ({
+        folder, folder_path: store.path(folder), id: d.id, name: d.name, description: d.description,
+        modules: d.modules.map((m) => ({ id: m, path: store.path(m) })),
+        sets: d.sets.map((set, index) => ({
+          index, label: `${set.major}.${set.minor}${set.suffix ? ` ${set.suffix}` : ""}`, open: set.open,
+          annotation: set.annotation, user: set.user, date: set.date,
+          members: set.members.map((copy) => {
+            const baseline = store.baseline_of(copy)!;
+            return { copy, module: baseline.module_id, path: store.path(baseline.module_id), label: baseline.label };
+          }),
+        })),
+      })),
+    };
+  }
+
+  // Which baseline set each of a module's baselines belongs to, if any.
+  op_baseline_set_names({ module }: any): Record<number, string> {
+    const store = this.store;
+    const names: Record<number, string> = {};
+    for (const baseline of store.baselines(this._formal(module).id)) {
+      const held = store.baseline_set_of(baseline.copy_id);
+      if (!held) continue;
+      const d = store.set_definitions(held.folder).find((each) => each.id === held.id)!;
+      const set = d.sets[held.index];
+      names[baseline.copy_id] = `${d.name} ${set.major}.${set.minor}`;
+    }
+    return names;
+  }
+
+  op_create_set_definition({ folder, name, description = "", modules = [] }: any): { id: number } {
+    return { id: this.store.create_set_definition(int(folder), String(name).trim(), description, modules.map(int)) };
+  }
+
+  op_update_set_definition({ folder, id, name, description = "", modules = [] }: any): void {
+    this.store.update_set_definition(int(folder), int(id), { name: String(name).trim(), description, modules: modules.map(int) });
+  }
+
+  op_delete_set_definition({ folder, id }: any): void {
+    this.store.delete_set_definition(int(folder), int(id));
+  }
+
+  op_create_baseline_set({ folder, id, major = false, suffix = "", annotation = "" }: any): { index: number } {
+    return { index: this.store.create_baseline_set(int(folder), int(id), !!major, suffix, annotation) };
+  }
+
+  op_add_to_baseline_set({ folder, id, index, modules }: any): void {
+    this.store.add_to_baseline_set(int(folder), int(id), int(index), modules.map(int));
+  }
+
+  op_close_baseline_set({ folder, id, index }: any): void {
+    this.store.close_baseline_set(int(folder), int(id), int(index));
+  }
 
   op_dxl_coverage(_args: any = {}): any {
     return coverage();

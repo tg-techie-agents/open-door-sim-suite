@@ -100,7 +100,10 @@ describe("module window", () => {
     call("move_object", { module: reqs, absno: head, direction: "promote" });
     assert.deepEqual(order(), [[other, 1], [head, 1], [requirement, 2]]);
     refused(/cannot move/, "move_object", { module: reqs, absno: other, direction: "up" });
-    refused(/children/, "delete_object", { module: reqs, absno: head });
+    // as Edit, Object, Delete: what is below goes too
+    assert.deepEqual(call("delete_object", { module: reqs, absno: head }).deleted, [head, requirement]);
+    assert.deepEqual(rows(reqs).map((r) => r.absno), [other]);
+    call("undelete_objects", { module: reqs, absnos: [head, requirement] });
     call("delete_object", { module: reqs, absno: requirement });
     assert.ok(!row(reqs, requirement));
     assert.equal(rows(reqs, { show_deleted: true }).find((r) => r.absno === requirement).deleted, true);
