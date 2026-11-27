@@ -1,8 +1,6 @@
 /* The notices of a database kept in the browser, and the layout for phones. */
 body { height: 100dvh; }
-#notice { padding: 2px 8px; background: #fff3bf; border-bottom: 1px solid var(--edge); font-size: 12px; }
 #storage-problem { padding: 4px 8px; background: #a40000; color: #fff; font-weight: 600; }
-#tree-toggle { display: none; }
 #stop { position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); bottom: 40px; padding: 8px 18px; border: 2px solid #a40000; font-weight: 700; white-space: nowrap; }
 
 /* Phones, and phones held sideways: bigger targets. */
@@ -11,9 +9,7 @@ body { height: 100dvh; }
   button { min-height: 34px; min-width: 34px; }
   input[type=text], input[type=search], select, textarea { font-size: 16px; min-height: 34px; }
   input[type=checkbox] { width: 20px; height: 20px; vertical-align: middle; }
-  #notice { font-size: 11px; }
   #menubar > button { padding: 1px 7px; min-height: 30px; }
-  #tree-toggle { display: inline-block; font-weight: 700; }
   #toolbar { gap: 4px; padding: 4px; }
   #toolbar .wide-only { display: none; }
   #toolbar > button { padding: 2px 8px; }
@@ -217,7 +213,7 @@ details summary { cursor: pointer; font-weight: 600; padding: 3px 0; }
 }
 
 @media print {
-  #notice, #menubar, #toolbar, #findbar, #explorer, #outline, #props, #dxl, #status, #stop, .menu, .dxlbox { display: none !important; }
+  #menubar, #toolbar, #findbar, #explorer, #outline, #props, #dxl, #status, #stop, .menu, .dxlbox { display: none !important; }
   html, body { height: auto; background: #fff; }
   body, #body { display: block; }
   #main { overflow: visible; }
@@ -251,51 +247,29 @@ details summary { cursor: pointer; font-weight: 600; padding: 3px 0; }
 #props .field > .name { display: block; font-weight: 600; }
 #props button.format { font-size: 11px; }
 
-/* The desktop: over the whole page on a narrow screen, behind the windows else. */
-#to-desktop { margin-left: auto; font-weight: 700; }
-dialog.desktop { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; }
-.desktop { padding: 14px 12px; overflow: auto; background: #2f6f73; color: #fff; }
-div.desktop { height: 100%; }
-.desktop .desk > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.desktop h1 { margin: 0; font-size: 18px; }
-.desktop h2 { margin: 16px 0 6px; font-size: 13px; }
-.desktop p { max-width: 700px; }
-.desktop .problem { color: #ffe08a; font-weight: 600; }
-.desktop .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; align-items: start; }
-.desktop .tiles.drop { border: 2px dashed #fff8; padding: 8px; }
-.desktop .tile { display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 4px; border: 1px solid transparent; }
-.desktop .tile.open { border-color: #fff; background: #0a2a6b66; }
-.desktop .tile .main { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; text-align: center; border: 0; background: transparent; color: inherit; overflow-wrap: anywhere; }
-.desktop .tile .main:hover, .desktop .tile .main:focus-visible { background: #0a2a6b99; }
-.desktop .tile .main span { font-size: 11px; opacity: .85; }
-.desktop .tile .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; }
-.desktop .tile .actions button { font-size: 11px; padding: 0 6px; color: #000; }
-/* icons: a page, and over it a database, a plus, or a door */
-.desktop .tile .main::before { content: ""; width: 30px; height: 38px; margin-bottom: 3px; background: #fff; border: 2px solid #1d3d40; box-sizing: border-box; }
-.desktop .tile.file .main::before { background: repeating-linear-gradient(#fff 0 5px, #8a93a8 5px 7px); }
-.desktop .tile.database .main::before { width: 36px; height: 36px; border-radius: 50% / 20%; background: repeating-linear-gradient(#e9c46a 0 9px, #7a5c12 9px 11px); }
-.desktop .tile.new .main::before { content: "+"; font: 700 24px/32px sans-serif; color: #1d3d40; background: #cfe3e4; }
-.desktop .tile.doors .main::before { width: 28px; background: radial-gradient(circle at 78% 55%, #ffe08a 0 3px, transparent 4px) #8b3a2b; }
-
-/* The start page: the actions in a column, beside a view of the tool. */
-dialog.launcher { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; background: var(--face); color: #111; }
-dialog.launcher[open] { display: flex; }
-.launcher nav { flex: 0 0 300px; display: flex; flex-direction: column; padding: 22px 18px; overflow: auto; background: #1d3d40; color: #fff; }
-.launcher h1 { margin: 0; font-size: 28px; }
-.launcher .tag { margin: 4px 0 20px; opacity: .85; }
-.launcher .actions { display: flex; flex-direction: column; gap: 10px; }
-.launcher .actions button { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; text-align: left; border: 2px solid #8fbfc2; border-radius: 3px; background: #2f6f73; color: #fff; }
-.launcher .actions button:hover { background: #3b868b; }
-.launcher .actions button.primary { background: #ffd966; border-color: #fff; color: #111; padding: 16px 12px; font-size: 16px; }
-.launcher .actions button span { font-size: 12px; font-weight: 400; }
-.launcher .actions button.link { border: 0; background: transparent; text-decoration: underline; font-size: 12px; padding: 4px 0; }
+/* The start page: a page of its own, over everything. */
+dialog.launcher { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; overflow: auto; background: #14202b; color: #eef3f6; }
+.launcher .page { box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: 14px; min-height: 100%; width: min(408px, 100%); margin: 0 auto; padding: 20px 24px; text-align: center; }
+.launcher h1 { margin: 0; font-size: 40px; }
+.launcher p { margin: 0; color: #b9c7d2; }
+.launcher .tag { font-size: 16px; color: #eef3f6; }
+.launcher img { display: block; width: 100%; max-width: 360px; height: auto; border: 6px solid #05090d; border-radius: 4px; pointer-events: none; user-select: none; }
+.launcher .actions { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 360px; }
+.launcher .actions button { min-height: 46px; padding: 6px 12px; border: 0; border-radius: 4px; background: #2b3c4b; color: #fff; font-size: 15px; overflow-wrap: anywhere; }
+.launcher .actions button:hover { background: #3a5063; }
+.launcher .actions button.primary { min-height: 62px; background: #2e7d32; box-shadow: inset 0 -4px #1b5e20; font-size: 20px; font-weight: 700; }
+.launcher .quiet { font-size: 12px; color: #8ea1b0; }
 .launcher .problem { color: #ffe08a; font-weight: 600; }
-.launcher main { flex: 1; min-width: 0; padding: 22px 24px; overflow: auto; }
-.launcher main > * { max-width: 760px; }
-.launcher img { display: block; width: 100%; height: auto; border: 1px solid #555; box-shadow: 0 4px 16px #0004; }
-.launcher img.narrow { max-width: 260px; }
-.launcher h2 { font-size: 17px; margin: 18px 0 6px; }
-@media (max-width: 700px) {
-  dialog.launcher[open] { display: block; overflow: auto; }
-  .launcher nav, .launcher main { overflow: visible; }
+.launcher .problem:empty { display: none; }
+/* With room, the view stands large beside the rest. */
+@media (min-width: 1000px) and (min-height: 520px) {
+  .launcher .page { display: grid; grid-template-columns: minmax(0, 720px) 340px; grid-template-rows: 1fr repeat(6, auto) 1fr; column-gap: 40px; row-gap: 14px; justify-content: center; justify-items: center; width: auto; height: 100%; padding: 20px 32px; }
+  .launcher .page > * { grid-column: 2; }
+  .launcher .page > h1 { grid-row: 2; }
+  .launcher .page > .tag { grid-row: 3; }
+  .launcher .page > .actions { grid-row: 4; }
+  .launcher .page > .problem { grid-row: 5; }
+  .launcher .page > p:not([class]) { grid-row: 6; }
+  .launcher .page > .quiet { grid-row: 7; }
+  .launcher .page > img { grid-column: 1; grid-row: 1 / -1; align-self: center; width: 100%; max-width: 720px; max-height: calc(100dvh - 40px); object-fit: contain; }
 }

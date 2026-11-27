@@ -1850,10 +1850,12 @@ function buildDxl() {
     DXL.context,
     h("div", { class: "source" }, DXL.gutter, DXL.source),
     DXL.result);
+  DXL.hl = DxlHighlight.attach(DXL.source);
 }
 
 function sourceChanged() {
   const lines = DXL.source.value.split("\n").length;
+  if (DXL.hl) DXL.hl.update();
   DXL.gutter.textContent = Array.from({ length: lines }, (_, i) => i + 1).join("\n") + "\n\n";
   DXL.gutter.scrollTop = DXL.source.scrollTop;
   stored("dxl", DXL.source.value);

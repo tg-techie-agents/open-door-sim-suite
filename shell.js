@@ -9,9 +9,8 @@
   const windows = new Map(); // module id (0: the Database Explorer) -> window
   const shared = new Map(); // what the windows hold in common: link start, clipboard
   let layoutKey = "opendoor-windows:" + location.pathname; // and the database, once known
-  const EXPLORER_WIDTH = 300;
-  const ICONS = 200; // the strip of the desktop that windows leave in sight
-  const surface = document.getElementById("surface");
+  const EXPLORER_WIDTH = 420; // its menu bar fits on one line
+  const ICONS = 100; // the column of icons that new windows leave in sight
   let top = 1;
   let boxOwner = null; // whose script has dialog boxes open
 
@@ -27,8 +26,6 @@
   }
 
   function tasks() {
-    // with windows up, the icons keep to their strip
-    surface.classList.toggle("strip", [...windows.values()].some((w) => !w.node.classList.contains("min")));
     document.getElementById("tasks").replaceChildren(...[...windows.values()].map((w) =>
       h("button", { type: "button", class: w.node.classList.contains("front") ? "front" : "", onclick: () => front(w) },
         w.title.textContent)));
@@ -62,14 +59,13 @@
     });
   }
 
-  // Half the room beside the Explorer each, so that two modules sit side by side.
+  // A module takes the room beside the Explorer; a later one lies over it, stepped
+  // so that each title stays in sight. Tile puts them side by side.
   function place() {
     const n = [...windows.keys()].filter((id) => id).length - 1; // modules open before this one
-    const left = ICONS + EXPLORER_WIDTH;
-    const room = desk.clientWidth - left;
-    const width = Math.max(420, Math.floor(room / 2));
-    const step = n < 2 ? 0 : (n - 1) * 28;
-    return { x: Math.min(left + (n % 2) * width + step, desk.clientWidth - width), y: step, w: width, h: desk.clientHeight - step };
+    const step = Math.max(0, n % 6) * 28;
+    const x = Math.min(ICONS + EXPLORER_WIDTH, Math.max(0, desk.clientWidth - 640)) + step;
+    return { x, y: step, w: desk.clientWidth - x, h: desk.clientHeight - step };
   }
 
   function tile() {
@@ -109,7 +105,7 @@
   }
 
   function create(id, name, where, pending) {
-    const title = h("span", {}, name);
+    const title = h("span", {}, id ? name : "OpenDoor: " + name);
     const frame = h("iframe", { title: name, src: "index.html" });
     if (id) frame.dataset.module = id;
     const w = { id, frame, title, pending, ready: false, z: 0, restore: null };
@@ -125,7 +121,7 @@
     };
     const head = h("div", { class: "head", ondblclick: maximise }, title,
       h("button", { type: "button", title: "Minimise", onclick: (e) => { e.stopPropagation(); minimise(w); } }, "_"),
-      h("button", { type: "button", title: "Maximise or restore", onclick: maximise }, "□"),
+      h("button", { type: "button", class: "max", title: "Maximise or restore", onclick: maximise }, "□"),
       h("button", { type: "button", title: "Close window", onclick: () => close(w) }, "x"));
     const grip = h("div", { class: "grip", title: "Resize" });
     w.node = h("section", { class: "win", "aria-label": name }, head, frame, grip);
@@ -180,7 +176,7 @@
 
   let opening = null;
   const opened = () => opening ??= openWindows()
-    .catch((e) => say("DOORS could not start: " + e.message, true))
+    .catch((e) => say("OpenDoor could not start: " + e.message, true))
     .finally(() => { opening = null; });
 
   // DOORS from the desktop: open it if it is not, and with `raise` bring it up.
@@ -276,6 +272,13 @@
       return pending || {};
     },
     front(from) { const w = find(from); if (w) front(w); },
+    // The DXL window lives inside its window, so that one is given room for it.
+    widen(from) {
+      const w = find(from);
+      if (!w || w.node.offsetWidth >= 760) return;
+      put(w, { x: Math.min(w.node.offsetLeft, desk.clientWidth - 760), y: 0, w: 760, h: desk.clientHeight });
+      save();
+    },
     explorer() { window.opendoorShow(true); },
     close(from) { const w = find(from); if (w && w.id) close(w); },
     title(from, text) {
@@ -293,11 +296,16 @@
     },
   };
 
-  document.getElementById("tile").onclick = tile;
-  document.getElementById("show-desktop").onclick = showDesktop;
+  window.opendoorTile = tile;
 
-  // A narrow screen has room for one window: the app as it is.
-  if (innerWidth <= 700) return void location.replace("index.html");
+  // A note goes after a few seconds; an error stays until it is clicked.
+  const note = document.getElementById("message");
+  let fading = null;
+  new MutationObserver(() => {
+    clearTimeout(fading);
+    if (note.textContent && note.className !== "error") fading = setTimeout(() => { note.textContent = ""; }, 4000);
+  }).observe(note, { childList: true, characterData: true, subtree: true });
+  note.onclick = () => { note.textContent = ""; };
 
   // A reload in a tab that was working goes back to it; a new one starts at the
   // bare desktop. (transport.js draws the desktop once the page has loaded.)

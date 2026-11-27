@@ -604,6 +604,8 @@ function helpPage() {
       `${count("full")} features full, ${count("part")} partial, ${count("no")} not offered. `
       + "A greyed menu entry is either not offered or cannot be done just now; pointing at it says which. "
       + "What DXL runs is on its own page: Help, DXL coverage."),
+    h("p", {}, "It is not DOORS, it has no connection with IBM, and it has never been compared with a running copy "
+      + "of DOORS. IBM, Rational, and DOORS are IBM's trademarks."),
     h("div", { class: "cov-controls" }, search, " ", kind), holder));
   box.problem.closest("dialog").classList.add("page");
 }

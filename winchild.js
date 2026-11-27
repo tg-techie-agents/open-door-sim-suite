@@ -12,7 +12,7 @@
   // A file dropped on DOORS would otherwise replace the page with it.
   for (const event of ["dragover", "drop"]) {
     document.addEventListener(event, (e) => {
-      if ([...(e.dataTransfer?.types || [])].includes("Files") && !e.target.closest("dialog.desktop")) e.preventDefault();
+      if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault();
     });
   }
   if (!host) return;
@@ -121,6 +121,12 @@
       if (stale) later(250);
     }
   }
+
+  const openDxlHere = openDxl;
+  openDxl = async () => {
+    host.widen(window);
+    return openDxlHere();
+  };
 
   window.opendoorWindow = {
     stale() {
