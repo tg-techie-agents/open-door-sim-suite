@@ -3,9 +3,10 @@
 // Loaded before app.js; the menus it adds use app.js's own helpers.
 
 import * as boxes from "./dialogs.ts";
-import { entered, start_screen } from "./host.ts";
+import { desktop, entered } from "./host.ts";
 import type { Host } from "./host.ts";
-import { read_saved, write_saved } from "./storage.ts";
+import { current_key, delete_database, list_databases, new_key, read_database, read_saved, use_database,
+  write_saved } from "./storage.ts";
 import type { Snapshot } from "./storage.ts";
 
 // app.js's globals.
@@ -15,10 +16,7 @@ declare function h(tag: string, props?: any, ...children: any[]): any;
 declare function say(text: string, isError?: boolean): void;
 declare function act(work: () => unknown): Promise<void>;
 declare function dialog(title: string, content: any, buttons?: any[]): unknown;
-declare function confirmDialog(title: string, text: string, okLabel: string, onOk: () => unknown): void;
 declare function download(filename: string, data: string, type: string): void;
-declare function chooseFile(accept: string, onFile: (file: File) => unknown): void;
-declare function writtenFile(path: string, text: string): unknown;
 declare function resetView(): void;
 declare function loadTree(): Promise<void>;
 declare function renderTree(): void;
@@ -33,6 +31,7 @@ let worker: Worker | null = null;
 let ready: Promise<void> | null = null;
 let last: Snapshot | null = null; // what a new worker starts from
 let kept = false; // this browser holds a database of the person's own
+let unsaved = false; // the open database has changes only this page holds
 let pending: Pending | null = null;
 let queue: Promise<unknown> = Promise.resolve();
 let next_id = 1;
@@ -41,9 +40,10 @@ const element = (id: string) => document.getElementById(id)!;
 const stop_button = element("stop"); // kept here: it moves between the page and dialogs
 
 function storage_problem(e: any): void {
+  unsaved = true;
   const box = element("storage-problem");
   box.textContent = "Changes are NOT being saved in this browser: " + (e?.message || e?.name || e) // some have no message
-    + ". Use Database, Save database to a file.";
+    + ". Use Desktop, Save to file.";
   box.hidden = false;
 }
 
@@ -52,6 +52,7 @@ async function keep(snapshot: Snapshot, replace = false): Promise<void> {
   kept = true;
   try {
     await write_saved(snapshot, replace);
+    unsaved = false;
     element("storage-problem").hidden = true;
   } catch (e) {
     storage_problem(e);
@@ -65,7 +66,8 @@ function discard_worker(): void {
   ready = null;
 }
 
-function start_worker(snapshot: Snapshot | null, empty: string | null = null): Promise<Snapshot | null> {
+function start_worker(snapshot: Snapshot | null, empty: string | null = null,
+  demo = "demo"): Promise<Snapshot | null> {
   worker?.terminate();
   const made = new Worker("worker.js");
   worker = made;
@@ -88,7 +90,7 @@ function start_worker(snapshot: Snapshot | null, empty: string | null = null): P
       else if (data.type === "progress") boxes.progress(data.progress);
       else pending.resolve(data);
     };
-    made.postMessage({ type: "init", snapshot, empty });
+    made.postMessage({ type: "init", snapshot, empty, demo });
   });
 }
 
@@ -103,14 +105,14 @@ async function boot(): Promise<void> {
   const saved = last;
   if (saved) kept = true;
   try {
-    const fresh = await start_worker(saved);
+    const fresh = await start_worker(saved, null, saved ? undefined : await free_name("demo").catch(() => "demo"));
     // The untouched demo is not saved: nothing of the person's is in it yet.
     if (fresh) last = fresh;
   } catch (e: any) {
     if (!saved) throw e;
     // Keep what is saved: never overwrite it with the example unasked.
     throw new Error(`The saved database could not be opened (${e.message}). `
-      + "Use Database, Reset to the example project.");
+      + "It is on the Desktop, where you can delete it.");
   }
 }
 
@@ -206,21 +208,33 @@ function in_turn<T>(work: () => Promise<T>): Promise<T> {
 const send_event: boxes.Send = (session, event) => in_turn(() => perform("dxl_event",
   { session, event, confirm_yes: Boolean(DXL.yes?.checked) }));
 
-// -- the database as a whole ---------------------------------------------------
+// -- the databases as wholes -------------------------------------------------
 
-// Start again from `snapshot` (null: the example) and show it. If it cannot be
-// opened, what was there stays.
-async function replace_database(snapshot: Snapshot | null, empty: string | null = null): Promise<void> {
-  boxes.clear(); // its script belongs to the database being replaced
+// Start again from `snapshot` (null: the demo, or empty if named) and show it,
+// as the record `key`. An untouched demo is not kept. If it cannot be opened,
+// what was there stays.
+async function replace_database(key: string, snapshot: Snapshot | null, empty: string | null = null): Promise<void> {
+  if (unsaved) {
+    throw new Error("The open database has changes this browser could not save. Save it to a file first.");
+  }
+  boxes.clear(); // its script belongs to the database being left
+  const demo = snapshot || empty !== null ? undefined : await free_name("demo").catch(() => "demo");
   await in_turn(async () => {
-    const before = last;
+    const before = { last, kept, key: current_key() };
     try {
-      const fresh = await start_worker(snapshot, empty);
+      const rev = (await read_database(key))?.rev ?? 0;
+      const fresh = await start_worker(snapshot, empty, demo);
       ready = Promise.resolve();
-      await keep(fresh ?? snapshot!, true);
+      use_database(key, rev);
+      if (snapshot || empty !== null) await keep(fresh ?? snapshot!, true);
+      else {
+        last = fresh;
+        kept = false;
+        element("storage-problem").hidden = true;
+      }
     } catch (e) {
       discard_worker();
-      last = before;
+      ({ last, kept } = before);
       throw e;
     }
   });
@@ -247,14 +261,7 @@ async function current_snapshot(): Promise<Snapshot> {
 }
 
 const SUFFIX = ".opendoor.json";
-
-const save_file = async () => {
-  const now = await current_snapshot();
-  const name = now.database.replace(/\.opendoor\.json$|\.json$/i, "") + SUFFIX;
-  download(name, JSON.stringify({ format: "opendoor-browser", version: 1, dump: now.dump, files: now.files }),
-    "application/json");
-  say("Saved " + name);
-};
+const MAX_FILE = 5 * 1024 * 1024; // every change writes the files out with the database
 
 async function read_file(file: File): Promise<Snapshot> {
   let data: any;
@@ -270,48 +277,73 @@ async function read_file(file: File): Promise<Snapshot> {
     files: Array.isArray(data.files) ? data.files : [] };
 }
 
-const open_file = () => chooseFile(".json,application/json", async (file) => {
-  const snapshot = await read_file(file);
-  confirmDialog("Open database file", `Replace the database in this browser with ${file.name}?`, "Open", async () => {
-    await replace_database(snapshot);
-    say("Opened " + file.name);
-  });
-});
+// A name no kept database has yet.
+async function free_name(wanted: string): Promise<string> {
+  const taken = new Set((await list_databases()).map((d) => d.name));
+  let name = wanted;
+  for (let n = 2; taken.has(name); n++) name = `${wanted} (${n})`;
+  return name;
+}
 
-const reset_example = () => confirmDialog("Reset to the example",
-  "Throw away the database and script files in this browser and load the example project again?", "Reset",
-  async () => {
-    await replace_database(null);
-    element("storage-problem").hidden = true;
-    say("The example project is loaded.");
-  });
-
-const script_files = async () => {
-  const { files } = await current_snapshot();
-  dialog("Files written by scripts", files.length
-    ? h("div", {}, files.map(([path, text]) => writtenFile(path, text)),
-      h("p", {}, "These are kept in this browser until you reset or open another database."))
-    : h("div", {}, "No script has written a file yet."));
-};
-(window as any).opendoorScriptFiles = script_files;
+const is_open = (key: string) => key === current_key() && kept;
 
 const host: Host = {
-  kept: () => in_turn(async () => { await engine(); return kept ? last!.database : null; }),
-  read_file,
-  replace: async (snapshot) => {
-    await replace_database(snapshot);
-    element("storage-problem").hidden = true;
+  databases: () => in_turn(async () => {
+    await engine().catch(() => {}); // a database that cannot be opened is still listed
+    return (await list_databases()).map((d) => ({ ...d, open: is_open(d.key) && ready !== null }));
+  }),
+  async open(key) {
+    if (is_open(key) && ready) return;
+    const saved = await read_database(key);
+    if (!saved) throw new Error("That database is no longer kept in this browser.");
+    await replace_database(key, saved.snapshot);
   },
-  create: (name) => replace_database(null, name),
-  save_file,
+  demo: () => replace_database(new_key(), null),
+  create: async (name) => replace_database(new_key(), null, await free_name(name)),
+  async add_database(file) {
+    const snapshot = await read_file(file);
+    snapshot.database = await free_name(snapshot.database);
+    await replace_database(new_key(), snapshot);
+  },
+  async save(key) {
+    const snapshot = is_open(key) && ready ? await current_snapshot() : (await read_database(key))?.snapshot;
+    if (!snapshot) throw new Error("That database is no longer kept in this browser.");
+    const name = snapshot.database.replace(/\.opendoor\.json$|\.json$/i, "") + SUFFIX;
+    download(name, JSON.stringify({ format: "opendoor-browser", version: 1, dump: snapshot.dump, files: snapshot.files }),
+      "application/json");
+    if (key === current_key()) unsaved = false;
+    say("Saved " + name);
+  },
+  async remove(key) {
+    const open = key === current_key();
+    await delete_database(key);
+    if (open) unsaved = false; // deleting it was asked for
+    if (open) await replace_database(new_key(), null);
+  },
+  files: async () => (await current_snapshot()).files,
+  async add_file(file) {
+    if (file.size > MAX_FILE) throw new Error(`${file.name} is too large: files up to 5 MB are kept.`);
+    const bytes = await file.arrayBuffer();
+    if (new Uint8Array(bytes).includes(0)) {
+      throw new Error(`${file.name} is not a text file. Only text is kept: save a spreadsheet as CSV first.`);
+    }
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch (e) {
+      text = new TextDecoder("windows-1252").decode(bytes);
+    }
+    await (window as any).opendoorTransport("add_file", { name: file.name, text });
+  },
+  remove_file: (path) => (window as any).opendoorTransport("remove_file", { path }),
+  use: (path, text) => (window as any).opendoorUse(path, text),
 };
 
-// The Database menu.
-(window as any).opendoorFiles = { save: save_file, open: open_file, reset: reset_example,
-  start: () => start_screen(host) };
+(window as any).opendoorDesktop = () => desktop(host);
 
 document.addEventListener("DOMContentLoaded", () => {
-  if (!entered()) start_screen(host);
+  if (!entered()) desktop(host);
+  element("menubar").append(h("button", { type: "button", id: "to-desktop", onclick: () => desktop(host) }, "Desktop"));
   // The phone's way to the database tree.
   element("menubar").prepend(h("button", { type: "button", id: "tree-toggle",
     onclick: () => document.body.classList.toggle("tree-open") }, "Tree"));

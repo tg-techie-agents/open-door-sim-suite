@@ -1232,6 +1232,19 @@ export class Api {
     return this.store.transaction(() => import_csv(this.store, item.id, text));
   }
 
+  // Files of the person's own, where a script that names them finds them.
+  op_add_file({ name, text }: any): { path: string } {
+    const bare = String(name).split(/[\\/]/).pop()!.trim();
+    if (!bare || bare === "." || bare === "..") throw new StoreError("the file needs a name");
+    const path = this.disk.cwd.replace(/\/$/, "") + "/" + bare;
+    this.disk.set(path, String(text));
+    return { path };
+  }
+
+  op_remove_file({ path }: any): void {
+    if (!this.disk.delete(String(path))) throw new StoreError("there is no such file");
+  }
+
   op_import_reqif({ folder, filename, base64_data }: any): any {
     return import_reqif(this.store, folder, _from_base64(base64_data), String(filename));
   }

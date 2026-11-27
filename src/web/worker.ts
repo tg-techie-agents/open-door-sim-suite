@@ -19,7 +19,7 @@ const CHANGES = new Set(["create_item", "update_item", "delete_item", "add_objec
   "set_links_exclusive", "create_linkset", "delete_linkset", "set_default_link", "change_access",
   "move_objects", "delete_objects", "undelete_objects", "set_value_many", "create_links", "delete_out_links", "delete_links_between", "delete_all_links",
   "record_session", "user_event", "remove_trigger", "drag_object", "copy_module", "create_set_definition", "update_set_definition", "delete_set_definition",
-  "create_baseline_set", "add_to_baseline_set", "close_baseline_set"]);
+  "create_baseline_set", "add_to_baseline_set", "close_baseline_set", "add_file", "remove_file"]);
 
 const scope = self as any;
 let api: Api;
@@ -29,7 +29,7 @@ function snapshot(): Snapshot {
 }
 
 // With nothing saved: the demo project, or an empty database named `empty`.
-function start(saved: Snapshot | null, empty: string | null): void {
+function start(saved: Snapshot | null, empty: string | null, demo: string): void {
   const disk = new VirtualDisk();
   let store: Store;
   if (saved) {
@@ -39,7 +39,7 @@ function start(saved: Snapshot | null, empty: string | null): void {
     store = new Store();
     if (empty === null) load_project(store, EXAMPLE);
   }
-  api = new Api(store, saved ? saved.database : empty ?? "demo", SCRIPTS, disk);
+  api = new Api(store, saved ? saved.database : empty ?? demo, SCRIPTS, disk);
 }
 
 // Output is sent as it appears, so that it survives if the script has to be stopped.
@@ -69,7 +69,7 @@ function describe(e: any): string {
 scope.onmessage = ({ data }: any) => {
   if (data.type === "init") {
     try {
-      start(data.snapshot, data.empty ?? null);
+      start(data.snapshot, data.empty ?? null, data.demo ?? "demo");
       scope.postMessage({ type: "ready", snapshot: data.snapshot ? null : snapshot() });
     } catch (e) {
       scope.postMessage({ type: "init_error", message: describe(e) });

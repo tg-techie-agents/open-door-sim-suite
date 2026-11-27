@@ -29,9 +29,12 @@ Node.js.
 After the build, `start-mac.command` and `start-windows.bat` start it by
 double-click.
 
-In the interface, a start screen offers the demo, a new empty database, or a
-database file saved earlier; Database, Start screen brings it back. The browser
-keeps one database at a time. The demo is an invented hobby-greenhouse project
+The interface starts on a desktop, which DOORS does not have: the databases kept
+in this browser, a new empty one, a database file saved earlier, the demo, and
+the open database's files. Drag text files onto it for scripts to read; what
+scripts write appears there (dragging out to the computer works in Chromium
+browsers; elsewhere click to download). The Desktop button brings it back. A
+browser can discard what it keeps, so save to a file what matters. The demo is an invented hobby-greenhouse project
 with planted faults: missing links, a "TBD", failed tests, and edits since the
 last baseline.
 

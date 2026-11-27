@@ -1481,30 +1481,30 @@ async function dxlColumnDialog() {
   ]);
 }
 
-const importReqif = () => act(async () => {
+const importReqif = () => act(async () => chooseFile(".reqif,.reqifz,.xml", importReqifFile));
+
+async function importReqifFile(file) {
   const folder = containerForNew().path;
-  chooseFile(".reqif,.reqifz,.xml", async (file) => {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let text = "";
-    for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    confirmDialog("Import ReqIF", `Import ${file.name} as new modules in ${folder}?`, "Import", async () => {
-      const reply = await api("import_reqif", { folder, filename: file.name, base64_data: btoa(text) });
-      await loadTree();
-      const done = `Imported ${reply.modules.length} module(s), ${reply.objects} objects, ${reply.links} links`;
-      // What the file held that did not come in. Said in a box as well, so it is not missed.
-      const dropped = [
-        reply.embedded_objects && `${reply.embedded_objects} picture(s) or embedded (OLE) object(s) dropped; only their fallback text was kept`,
-        reply.unplaced_objects && `${reply.unplaced_objects} object(s) in no specification not imported`,
-        reply.skipped_relations && `${reply.skipped_relations} relation(s) to objects that were not imported skipped`,
-      ].filter(Boolean);
-      say([done, ...dropped].join("; "));
-      if (dropped.length) {
-        dialog("Not everything was imported", h("div", {}, h("p", {}, done + "."),
-          h("ul", {}, dropped.map((line) => h("li", {}, line)))));
-      }
-    });
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  confirmDialog("Import ReqIF", `Import ${file.name} as new modules in ${folder}?`, "Import", async () => {
+    const reply = await api("import_reqif", { folder, filename: file.name, base64_data: btoa(text) });
+    await loadTree();
+    const done = `Imported ${reply.modules.length} module(s), ${reply.objects} objects, ${reply.links} links`;
+    // What the file held that did not come in. Said in a box as well, so it is not missed.
+    const dropped = [
+      reply.embedded_objects && `${reply.embedded_objects} picture(s) or embedded (OLE) object(s) dropped; only their fallback text was kept`,
+      reply.unplaced_objects && `${reply.unplaced_objects} object(s) in no specification not imported`,
+      reply.skipped_relations && `${reply.skipped_relations} relation(s) to objects that were not imported skipped`,
+    ].filter(Boolean);
+    say([done, ...dropped].join("; "));
+    if (dropped.length) {
+      dialog("Not everything was imported", h("div", {}, h("p", {}, done + "."),
+        h("ul", {}, dropped.map((line) => h("li", {}, line)))));
+    }
   });
-});
+}
 
 function filterDialog() {
   needModule();
@@ -1715,6 +1715,11 @@ function download(filename, data, type) {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+// An export is downloaded, and a copy joins the open database's files.
+function exported(filename, text) {
+  send("add_file", { name: filename, text }).catch((e) => say(`${filename} was downloaded but not kept on the Desktop: ${e.message}`, true));
+}
+
 function chooseFile(accept, onFile) {
   document.querySelectorAll("input.chooser").forEach((old) => old.remove());
   // Phones grey out file types they do not know (.dxl, .reqif), so touch screens get no filter.
@@ -1751,6 +1756,7 @@ const exportCsv = () => act(async () => {
     const file = await api("export_csv", { module: m.id, columns });
     // The marker lets Excel recognise UTF-8.
     download(file.filename, "﻿" + file.text.replace(/^﻿/, ""), "text/csv");
+    exported(file.filename, file.text);
     say("Exported " + file.filename);
   };
   if (!S.columns.length) return save(null);
@@ -1767,16 +1773,33 @@ const exportCsv = () => act(async () => {
 const importCsv = () => act(async () => {
   const m = needModule();
   if (!writable()) throw new Error(can.write() + ".");
-  chooseFile(".csv,text/csv", async (file) => {
-    const text = await readUtf8(file);
-    confirmDialog("Import CSV", `Import ${file.name} into ${m.path}?`, "Import", async () => {
-      const reply = await api("import_csv", { module: m.id, text });
-      await refresh();
-      const ignored = reply.ignored_columns.length ? `; columns not imported: ${reply.ignored_columns.join(", ")}` : "";
-      say(`Imported ${file.name}: ${reply.created} created, ${reply.updated} updated${ignored}`);
-    });
-  });
+  chooseFile(".csv,text/csv", async (file) => importCsvText(m, file.name, await readUtf8(file)));
 });
+
+function importCsvText(m, name, text) {
+  confirmDialog("Import CSV", `Import ${name} into ${m.path}?`, "Import", async () => {
+    const reply = await api("import_csv", { module: m.id, text });
+    await refresh();
+    const ignored = reply.ignored_columns.length ? `; columns not imported: ${reply.ignored_columns.join(", ")}` : "";
+    say(`Imported ${name}: ${reply.created} created, ${reply.updated} updated${ignored}`);
+  });
+}
+
+// What the desktop can do with a file in DOORS.
+window.opendoorUse = (path, text) => {
+  const name = path.split("/").pop();
+  if (/\.(dxl|inc)$/i.test(name)) {
+    return { label: "Open in DXL", run: async () => { await openDxl(); setSource(text.replace(/^\uFEFF/, ""), name); } };
+  }
+  if (/\.csv$/i.test(name) && S.data && writable()) {
+    const m = needModule();
+    return { label: `Import into ${S.data.module.name}`, run: async () => importCsvText(m, name, text.replace(/^\uFEFF/, "")) };
+  }
+  if (/\.(reqif|xml)$/i.test(name)) {
+    return { label: "Import ReqIF", run: () => importReqifFile(new File([text], name)) };
+  }
+  return null;
+};
 
 function exportReqifDialog() {
   const boxes = formalModules().map((n) => h("input", { type: "checkbox", value: n.id, checked: n.id === S.moduleId }));
@@ -1789,6 +1812,7 @@ function exportReqifDialog() {
       const binary = atob(file.base64), bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       download(file.filename, bytes, "application/xml");
+      exported(file.filename, new TextDecoder().decode(bytes));
       say("Exported " + file.filename);
     } },
     { label: "Cancel" },
@@ -1914,7 +1938,7 @@ function buildDxl() {
       h("button", { onclick: () => chooseFile(".dxl,.inc,.txt", openScript) }, "Open file..."),
       h("button", { onclick: () => download(DXL.name || "script.dxl", DXL.source.value, "text/plain") }, "Save as..."),
       h("button", { onclick: () => { DXL.result.replaceChildren(); } }, "Clear output"),
-      h("button", { onclick: () => act(window.opendoorScriptFiles), title: "Every file a script has written" }, "Written files...")),
+      h("button", { onclick: () => act(window.opendoorDesktop), title: "Every file of this database, on the Desktop" }, "Written files...")),
     DXL.context,
     h("div", { class: "source" }, DXL.gutter, DXL.source),
     DXL.result);
@@ -1993,7 +2017,7 @@ async function runDxl() {
       parts.unshift(h("div", { class: "files" },
         h("div", { class: "heading" }, files.length === 1 ? "The script wrote a file:" : `The script wrote ${files.length} files:`),
         files.map((f) => writtenFile(f.name, f.text)),
-        h("div", { class: "note" }, "Download puts a copy in your downloads folder. The files also stay in this browser: Written files, or Database, Files written by scripts.")));
+        h("div", { class: "note" }, "Download puts a copy in your downloads folder. The files also stay in this browser: Written files, or the Desktop.")));
       say(`Script wrote ${files.map((f) => shownPath(f.name)).join(", ")}: View or Download it in the DXL window.`);
     }
     DXL.result.replaceChildren(...parts.filter(Boolean));
