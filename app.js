@@ -942,6 +942,13 @@ function renderProps() {
       if (module === S.moduleId) await refresh({ keepProps: true });
       say("Saved " + a.name);
     }));
+    // Esc puts the stored value back, so leaving the box has nothing to save
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || e.isComposing || read() === held) return;
+      e.preventDefault();
+      input.value = held;
+      say("Discarded the change to " + a.name);
+    });
     const format = editable && takesFormatting(a) ? h("button", { type: "button", class: "format",
       title: `Format ${a.name}`, onmousedown: (e) => e.preventDefault(),
       onclick: (e) => { e.preventDefault(); field.replaceWith(formattedField(a.name, null, input.value, held)); } },
@@ -955,10 +962,18 @@ function renderProps() {
     const [box, area, read] = richEditor(formatted || richDoc(text), name);
     if (!editable) area.contentEditable = "false";
     let held = stored, kept = formatted, start = JSON.stringify(formatted ? read() : richDoc(stored));
-    area.addEventListener("keydown", (e) => e.stopPropagation());
+    let discarded = false;
+    area.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key !== "Escape" || e.isComposing || JSON.stringify(read()) === start) return;
+      e.preventDefault();
+      discarded = true; // taking the box out blurs it, which must not save
+      field.replaceWith(formattedField(name, kept, held));
+      say("Discarded the change to " + name);
+    });
     area.addEventListener("blur", () => act(async () => {
       const doc = read();
-      if (!editable || JSON.stringify(doc) === start) return;
+      if (discarded || !editable || JSON.stringify(doc) === start) return;
       try {
         await setFormatted(module, absno, name, held, kept, doc);
       } catch (e) {
@@ -969,7 +984,8 @@ function renderProps() {
       if (module === S.moduleId) await refresh({ keepProps: true });
       say("Saved " + name);
     }));
-    return h("div", { class: "field" }, h("span", { class: "name" }, name), box);
+    const field = h("div", { class: "field" }, h("span", { class: "name" }, name), box);
+    return field;
   }
 
   const links = (list, outgoing) => list.map((link) => {
@@ -1909,16 +1925,17 @@ function goToLine(line) {
 }
 
 async function checkDxl() {
-  const { error } = await api("check", { source: DXL.source.value });
+  const { error, warnings } = await api("check", { source: DXL.source.value });
   $("dxl").classList.add("ran");
-  if (!error) {
-    DXL.result.replaceChildren(h("div", { class: "note" },
-      "Check found no errors. Nothing was run, so errors that only a run meets are not ruled out."));
-    return;
-  }
-  const { line, file, message } = error;
-  const where = line ? `${file ? file + ", " : ""}line ${line}: ` : "";
-  DXL.result.replaceChildren(h("div", { class: "fault", onclick: () => { if (line && !file) goToLine(line); } }, where + message));
+  // one finding, which takes the person to its line when it is in this script
+  const finding = (kind, { line, file, message }, label = "") => {
+    const where = line ? `${file ? file + ", " : ""}line ${line}: ` : "";
+    return h("div", { class: kind, onclick: () => { if (line && !file) goToLine(line); } }, where + label + message);
+  };
+  if (error) return DXL.result.replaceChildren(finding("fault", error));
+  const found = warnings.length ? `no errors and ${warnings.length} warning${warnings.length > 1 ? "s" : ""}` : "no errors";
+  DXL.result.replaceChildren(...warnings.map((w) => finding("warning", w, "warning: ")), h("div", { class: "note" },
+    `Check found ${found}. Nothing was run, so errors that only a run meets are not ruled out.`));
 }
 
 async function runDxl() {

@@ -120,6 +120,7 @@ table.list { border-collapse: collapse; background: #fff; width: 100%; }
 #dxl textarea { flex: 1; border: 0; resize: none; white-space: pre; overflow: auto; tab-size: 4; }
 #dxl .result { flex: 2; min-height: 0; overflow: auto; margin: 6px 8px 8px; background: #fff; border: 1px solid #7f9db9; padding: 4px; font: 12px/17px Consolas, Menlo, "Courier New", monospace; white-space: pre-wrap; }
 #dxl .result .fault { color: #a40000; font-weight: 700; cursor: pointer; }
+#dxl .result .warning { color: #7a4b00; cursor: pointer; }
 #dxl .result .note { color: #555; font-style: italic; }
 
 .written { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 4px 0; }
