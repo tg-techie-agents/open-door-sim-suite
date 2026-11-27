@@ -348,6 +348,28 @@ async function defaultLinkDialog() {
   });
 }
 
+// ---------------------------------------------------------------- triggers
+
+async function triggersDialog() {
+  const holder = h("div", {});
+  const draw = async () => {
+    const { triggers } = await api("triggers");
+    holder.replaceChildren(triggers.length ? listTable(["Name", "Held by", "Fires", "DXL", ""],
+      triggers.map((t) => h("tr", {}, h("td", {}, t.name), h("td", {}, t.path),
+        h("td", {}, `${t.fires}, priority ${t.priority}`), h("td", {}, h("pre", {}, t.dxl)),
+        h("td", {}, h("button", { type: "button", onclick: () => act(async () => {
+          await api("remove_trigger", { at: t.at, index: t.index });
+          await draw();
+          if (S.moduleId !== null) await refresh();
+        }) }, "Remove")))))
+      : h("p", {}, "There are no stored triggers."));
+  };
+  await draw();
+  dialog("Triggers", h("div", {}, holder,
+    h("p", { class: "hint" }, "A script defines triggers. Remove deletes one whatever the access rights say.")),
+  [{ label: "Close" }]);
+}
+
 // ---------------------------------------------------------------- access rights
 
 const RIGHT_NAMES = ["read", "modify", "create", "delete", "control"];
@@ -382,9 +404,10 @@ function accessDialog(thing, title) {
         h("td", {}, e.rights.map(shown).join(", ") || "none"),
         h("td", {}, !info.inherited && !info.root && e.name !== null ? button("Remove", { action: "unset", name: e.name }) : null)))),
       info.root ? "" : h("p", {}, info.inherited ? button("Make specific", { action: "specific" })
-        : [button("Inherit from above", { action: "inherit" }), " ",
-          h("button", { type: "button", title: "Skips the check: the way out if nobody here may change these rights",
-            onclick: () => change({ action: "reset" }) }, "Reset (as database manager)")]));
+        : button("Inherit from above", { action: "inherit" }), " ",
+      h("button", { type: "button", title: "Skips the check: the way out if you may no longer change something. "
+        + "For a module, also clears the rights set on its attributes and views",
+        onclick: () => change({ action: "reset" }) }, "Reset (as database manager)")));
   };
   box = dialog("Access rights: " + title, h("div", {}, holder, adding,
     h("p", { class: "hint" }, "Enforced on changes. Not here: read restrictions, rights on views or attributes, and groups.")), [

@@ -57,8 +57,10 @@ test("a pre trigger that does not say, or equal priorities, are not guessed at",
   dxl('delete("quiet", attribute->"Cost", pre, save, 1)\n'
     + 'trigger("x", attribute->"Cost", post, save, 1, "int i = 0")\n'
     + 'trigger("y", attribute->"Cost", post, save, 1, "int i = 0")\n');
-  assert.throws(() => store.by_hand(() => store.set_value(o, "Cost", "1")), /same priority/);
-  assert.equal(store.value(o, "Cost"), "");
+  // post triggers: the change has happened, so it stands; neither is run, and why is said
+  store.by_hand(() => store.set_value(o, "Cost", "1"));
+  assert.match(store.trigger_output.join(""), /same priority/);
+  assert.equal(store.value(o, "Cost"), "1");
 });
 
 test("module open triggers: project and database wide; a script open stops", () => {
@@ -123,4 +125,39 @@ test("database and project wide triggers survive a project file", () => {
   const again = new Store(":memory:", "ann");
   load_project(again, dump_project(store));
   assert.deepEqual(again.trigger_holders().map((at) => again.path(at)).sort(), ["/", "/P"]);
+});
+
+test("a failing or clashing post trigger never keeps a module shut, and can be removed without DXL", () => {
+  const { store, m, dxl } = setup();
+  dxl('trigger("bad", project->all->module->all, post, open, 1, "int x = 1 / 0")\n');
+  const api = new Api(store, "t", [], new VirtualDisk());
+  api.op_user_event({ module: m });
+  assert.match(api.op_trigger_output().text, /'bad' could not run here: .*division by zero/);
+  dxl('trigger("twin", project->all->module->all, post, open, 1, "int i = 0")\n');
+  api.op_user_event({ module: m });
+  assert.match(api.op_trigger_output().text, /same priority/);
+  for (let left = api.op_triggers().triggers; left.length; left = api.op_triggers().triggers) {
+    api.op_remove_trigger(left[0]);
+  }
+  api.op_user_event({ module: m });
+  assert.equal(api.op_trigger_output().text, "");
+});
+
+test("a failing pre-open trigger stops the opening, and its removal lets it open", () => {
+  const { store, m, dxl } = setup();
+  dxl('trigger("shut", project->all->module->all, pre, open, 1, "int x = 1 / 0")\n');
+  const api = new Api(store, "t", [], new VirtualDisk());
+  assert.throws(() => api.op_user_event({ module: m }), /'shut' could not run here/);
+  api.op_remove_trigger(api.op_triggers().triggers[0]);
+  api.op_user_event({ module: m });
+});
+
+test("the database manager's reset gives back an attribute locked to someone else", () => {
+  const { store, m, o } = setup();
+  const others = [{ name: "bob", rights: 31 }, { name: null, rights: 1 }];
+  store.change_attribute_access(m, "Cost", "values", () => others);
+  assert.throws(() => store.set_value(o, "Cost", "1"), /access/);
+  new Api(store, "t", [], new VirtualDisk()).op_change_access({ item: m, action: "reset" });
+  store.set_value(o, "Cost", "1");
+  assert.equal(store.value(o, "Cost"), "1");
 });

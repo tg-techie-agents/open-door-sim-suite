@@ -188,6 +188,15 @@ what it prints is this suite's own wording.
   or anything else that would reach one stops, because the manuals do not say
   whether DOORS fires it then. No dynamic, drag-and-drop, project level, module
   close, or object open triggers.
+- A trigger cannot keep you out of your data. A post trigger that fails or runs
+  past 5 seconds is reported and the action stands (only its own changes are
+  dropped). If a module is kept shut, the interface offers to open it without
+  its open triggers, and Tools, Triggers... lists and removes any trigger. Those
+  two are this suite's own; opening a link module's list runs no triggers. A pre
+  trigger that fails still stops what it watches. What DOORS does when a trigger
+  fails has not been checked.
+- Access rights that stop you changing something are cleared by Database,
+  Access rights..., Reset (as database manager), also this suite's own.
 - Users, groups, and access rights can be set and are enforced, including on
   attribute definitions, attribute values, and views. You are one user, and
   rights under which you could not read something are refused: nothing is ever

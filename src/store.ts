@@ -2511,9 +2511,28 @@ export class Store {
   }
 
   // What a Database Manager does for a list that has shut everyone present out.
-  // Not checked, and for no script: the interface may offer it.
+  // Not checked, and for no script: the interface may offer it. A module's
+  // attributes and views lose their own lists too, which nothing else here can
+  // take back from someone without control.
   reset_access(thing: Guarded): void {
-    this.transaction(() => this._set_access_list(thing, undefined));
+    this.transaction(() => {
+      this._set_access_list(thing, undefined);
+      const data = thing instanceof Obj ? undefined : this._modules.get(thing);
+      if (!data) return;
+      for (const [name, def] of [...data.defs]) {
+        if (!def.def_access && !def.val_access) continue;
+        const row = { ...def };
+        delete row.def_access;
+        delete row.val_access;
+        this._put(data.defs, name, row);
+      }
+      for (const [name, json] of [...data.views]) {
+        const definition = JSON.parse(json);
+        if (!definition.access) continue;
+        delete definition.access;
+        this._put(data.views, name, JSON.stringify(definition));
+      }
+    });
   }
 
   // The lists held by attribute definitions and views.
@@ -2598,8 +2617,10 @@ export class Store {
       + "interface)");
   }
 
-  // Run the triggers for something the person is doing. A pre trigger that
-  // does not pass stops it.
+  // Run the triggers for something the person is doing. A pre trigger that does
+  // not pass, or cannot run, stops it. A post trigger comes after the thing has
+  // happened: if it cannot run, only its own changes are dropped and the reason
+  // is reported with what triggers printed.
   fire(when: "pre" | "post", level: string, event: string, context: TriggerContext): void {
     const found = this.triggers_for(context.module, level, event, context.absno, context.attribute)
       .filter((t) => t.row.when === when);
@@ -2607,19 +2628,27 @@ export class Store {
     const engine = Store.trigger_engine;
     if (!engine) throw new StoreError("triggers are not offered here without the DXL engine");
     found.sort((a, b) => a.row.priority - b.row.priority);
+    const report = (e: unknown) => {
+      if (when === "pre" || !(e instanceof StoreError)) throw e;
+      this.trigger_output.push(`${e.message}\n`);
+    };
     for (let i = 1; i < found.length; i++) {
       if (found[i].row.priority === found[i - 1].row.priority) {
-        throw new StoreError(`the triggers ${_repr(found[i - 1].row.name)} and ${_repr(found[i].row.name)} have `
-          + "the same priority, and the order DOORS then runs them in is not documented");
+        return report(new StoreError(`the triggers ${_repr(found[i - 1].row.name)} and ${_repr(found[i].row.name)} `
+          + "have the same priority, and the order DOORS then runs them in is not documented"));
       }
     }
     const by_hand = this._by_hand;
     this._by_hand = false; // what the trigger's own DXL does is a script's doing
     try {
       for (const [i, trigger] of found.entries()) {
-        if (!engine.run(this, trigger, context)) {
-          throw new StoreError(`the trigger ${_repr(trigger.row.name)} did not allow this`
-            + (i + 1 < found.length ? " (the triggers after it were not run here)" : ""));
+        try {
+          if (!this.transaction(() => engine.run(this, trigger, context))) {
+            throw new StoreError(`the trigger ${_repr(trigger.row.name)} did not allow this`
+              + (i + 1 < found.length ? " (the triggers after it were not run here)" : ""));
+          }
+        } catch (e) {
+          report(e);
         }
       }
     } finally {
@@ -2658,9 +2687,10 @@ export class Store {
     });
   }
 
-  delete_trigger(at: number, row: TriggerRow): void {
+  // `checked` false: the interface's way out, whatever the access rights say.
+  delete_trigger(at: number, row: TriggerRow, checked: boolean = true): void {
     this.transaction(() => {
-      this._require(at, RIGHTS.modify, "delete a trigger");
+      if (checked) this._require(at, RIGHTS.modify, "delete a trigger");
       const held = this._items.get(at)!;
       const left = (held.triggers ?? []).filter((o) => o !== row);
       if (left.length === (held.triggers ?? []).length) throw new StoreError("that trigger no longer exists");

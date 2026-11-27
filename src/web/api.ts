@@ -862,7 +862,6 @@ export class Api {
     const store = this.store;
     const id = int(module);
     if (store.item(id).kind !== "link") throw new StoreError(`${store.item(id).name} is not a link module`);
-    store.refuse_triggered({ module: id }, "module", "open", "showing a link module");
     const links: any[] = [];
     const held = new Map<number, any>();
     const end = (obj: Obj) => {
@@ -915,6 +914,24 @@ export class Api {
     const unsettled = absno === null && this.store._reaching(id).some((t) => t.row.level === "object");
     return { note: unsettled ? "Sync triggers did not run for the object current on opening: whether DOORS "
       + "runs them then is not documented." : null };
+  }
+
+  // Every stored trigger, so that one can be seen and removed without DXL.
+  op_triggers(_args: any = {}): any {
+    const store = this.store;
+    return {
+      triggers: store.trigger_holders().flatMap((at) => store.own_triggers(at).map(({ row }, index) => ({
+        at, index, path: store.path(at), name: row.name, dxl: row.dxl, priority: row.priority,
+        fires: `${row.when}-${row.event}, ${row.level}` + (row.attribute ? ` ${row.attribute}` : "")
+          + (row.absno === undefined ? "" : ` ${row.absno}`),
+      }))),
+    };
+  }
+
+  op_remove_trigger({ at, index }: any): void {
+    const found = this.store.own_triggers(int(at))[int(index)];
+    if (!found) throw new StoreError("that trigger no longer exists");
+    this.store.delete_trigger(found.at, found.row, false);
   }
 
   // What triggers have printed since this was last asked.
