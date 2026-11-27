@@ -214,6 +214,7 @@ async function perform(operation: string, args: any): Promise<any> {
     }
   }
   await engine();
+  if (operation === "run_dxl" || operation === "dxl_event") args = { ...args, folder: folders.linked() };
   let reply: any;
   try {
     reply = await send({ type: "call", operation, args }, TIMED.has(operation));
@@ -228,7 +229,10 @@ async function perform(operation: string, args: any): Promise<any> {
     // Opening and closing modules is also written down; that is not the person's change.
     if (current_key() === fresh_demo() && operation !== "user_event" && operation !== "record_session") set_fresh_demo(null);
     await keep(reply.snapshot);
-    await folders.changed(reply.snapshot.files, (reply.result?.files ?? []).map((f: any) => f.name));
+    // A run that does not save writes nothing to the folder, not even what an earlier one could not.
+    if (!reply.result?.rolled_back) {
+      await folders.changed(reply.snapshot.files, (reply.result?.files ?? []).map((f: any) => f.name));
+    }
   }
   if (reply.not_saved) storage_problem(new Error(reply.not_saved));
   if (reply.error !== undefined) throw new Error(reply.error);

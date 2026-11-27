@@ -107,7 +107,9 @@ export function folder_link(database: Database) {
           + "the open database, under the folder's name. Copies already under that name are replaced. They stay with "
           + "the database in this browser, and in a file saved from it, until you delete them."),
         h("li", {}, "What a script writes there is written to the real folder, as UTF-8, replacing a file of the "
-          + "same name without asking again. This holds for Try without saving too, which undoes database changes only."),
+          + "same name without asking again."),
+        h("li", {}, "A run that does not save (Try without saving, or a module open read-only) leaves the folder "
+          + "and its copies as they were, and says what it would have written there."),
         h("li", {}, "Nothing in the real folder is deleted or renamed, whatever a script does."),
         h("li", {}, "The link ends when the page is reloaded or closed. To see edits made outside, read it again.")),
       h("p", {}, "Made-up data only.")),
@@ -123,6 +125,8 @@ export function folder_link(database: Database) {
   };
 
   return {
+    // The folder whose copies are in the open database, if one is linked.
+    linked: (): string | null => (mount && database.key() === mount.key ? mount.name : null),
     choices(): Choice[] {
       if (!mount) {
         const only = (window as any).showDirectoryPicker ? "" : "\nChrome and Edge only";

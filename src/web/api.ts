@@ -1136,7 +1136,7 @@ export class Api {
     return { source: source.replace(/^﻿/, "") };
   }
 
-  op_run_dxl({ source, module = null, view = null, dry_run = false, confirm_yes = false }: any): any {
+  op_run_dxl({ source, module = null, view = null, dry_run = false, confirm_yes = false, folder = null }: any): any {
     this.op_dxl_close(); // a new run closes the boxes of the one before
     let open_module: string | null = null;
     if (module !== null && !this.store.is_baseline(int(module))) {
@@ -1149,7 +1149,7 @@ export class Api {
         () => Boolean(confirm_yes), Boolean(dry_run), false, this.disk, null, [], view, host);
       reply.unsaved = result.unsaved;
       this.dialogs = result.dialogs;
-    });
+    }, dry_run ? folder : null);
     reply.dialogs = this.dialogs && this.dialogs.spec();
     return reply;
   }
@@ -1165,7 +1165,8 @@ export class Api {
   }
 
   // One thing a person did with a script's dialog box: its callbacks run now.
-  op_dxl_event({ session, event, confirm_yes = false }: { session: number; event: DialogEvent; confirm_yes?: boolean }): any {
+  op_dxl_event({ session, event, confirm_yes = false, folder = null }:
+    { session: number; event: DialogEvent; confirm_yes?: boolean; folder?: string | null }): any {
     const live = this.dialogs;
     if (!live || live.id !== session) {
       return { error: null, output: "", unsaved: [], files: [], rolled_back: false,
@@ -1174,7 +1175,7 @@ export class Api {
     const reply: any = { error: null, unsaved: [], files: [] };
     this._scripted(reply, (out) => {
       live.dispatch(event, { out, ask: () => Boolean(confirm_yes) });
-    });
+    }, live.rt.state.get("dry run") ? folder : null);
     reply.unsaved = live.modified().map((m) => this.store.path(m)).sort();
     reply.rolled_back = Boolean(live.rt.state.get("dry run"));
     reply.dialogs = live.spec();
@@ -1188,7 +1189,12 @@ export class Api {
   }
 
   // Run DXL and gather into `reply` what it printed, what failed and the files it wrote.
-  _scripted(reply: any, work: (out: _Output) => void): void {
+  // `folder` names the copies of a folder on the person's computer that this run
+  // must leave as they are (a run that does not save): what it did there is told
+  // in reply.held and then undone.
+  _scripted(reply: any, work: (out: _Output) => void, folder: string | null = null): void {
+    const under = folder === null ? null : this._under(folder);
+    const before = [...this.disk].filter(([path]) => under !== null && path.startsWith(under));
     const out = new _Output(this.on_output);
     // Every file written, including one rewritten with the same text as before.
     const written = new Set<string>();
@@ -1207,8 +1213,23 @@ export class Api {
     if (out.stopped) reply.error = { line: 0, message: out.stopped, file: null };
     reply.output = out.getvalue();
     for (const [path, text] of this.disk) {
-      if (written.has(path)) reply.files.push({ name: path, text });
+      if (written.has(path) && !(under !== null && path.startsWith(under))) reply.files.push({ name: path, text });
     }
+    if (under !== null) this._hold(reply, under, new Map(before), written);
+  }
+
+  _under(folder: string): string {
+    return this.disk.cwd.replace(/\/$/, "") + "/" + String(folder) + "/";
+  }
+
+  _hold(reply: any, under: string, before: Map<string, string>, written: Set<string>): void {
+    const now = [...this.disk].filter(([path]) => path.startsWith(under));
+    const write = now.filter(([path, text]) => written.has(path) || before.get(path) !== text)
+      .map(([name, text]) => ({ name, text }));
+    const remove = [...before.keys()].filter((path) => !this.disk.has(path));
+    for (const [path] of now) if (!before.has(path)) this.disk.delete(path);
+    for (const [path, text] of before) this.disk.set(path, text);
+    if (write.length || remove.length) reply.held = { folder: under.split("/").at(-2), write, remove };
   }
 
   op_dxl_column({ module, source }: any): any {
@@ -1257,7 +1278,7 @@ export class Api {
 
   // The copies of a folder on the person's computer: all that is under its name.
   op_set_folder({ name, files }: any): void {
-    const under = this.disk.cwd.replace(/\/$/, "") + "/" + String(name) + "/";
+    const under = this._under(name);
     for (const path of [...this.disk.keys()]) if (path.startsWith(under)) this.disk.delete(path);
     for (const [path, text] of files) this.disk.set(under + String(path), String(text));
   }

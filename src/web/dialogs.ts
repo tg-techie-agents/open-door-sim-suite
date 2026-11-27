@@ -8,6 +8,7 @@ declare const DXL: any;
 declare function h(tag: string, props?: any, ...children: any[]): any;
 declare function act(work: () => unknown): Promise<void>;
 declare function writtenFile(path: string, text: string): any;
+declare function heldBack(held: any): any;
 declare function loadTree(): Promise<void>;
 declare function refresh(): Promise<void>;
 declare function richNodes(doc: any): any[];
@@ -707,6 +708,11 @@ function report(panel: Panel, reply: any): void {
   if (reply.files?.length) {
     panel.fault.append(h("div", { class: "note" }, `Wrote ${reply.files.map((f: any) => f.name.split("/").pop()).join(", ")}: `
       + "see the DXL window to view or download."));
+  }
+  if (reply.held) {
+    parts.push(heldBack(reply.held));
+    panel.fault.append(h("div", { class: "note" }, `Nothing was written to the folder ${reply.held.folder}: `
+      + "the DXL window says what would have been."));
   }
   if (reply.rolled_back && parts.length) parts.push(h("div", { class: "note" }, "Try without saving: database changes were undone."));
   if (!reply.dialogs?.open) parts.push(h("div", { class: "note" }, "The dialog box is closed; the script is finished."));
