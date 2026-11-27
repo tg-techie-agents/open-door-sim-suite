@@ -19,7 +19,22 @@ function h(tag, props, ...children) {
 }
 
 // Every operation goes through transport.js, which is loaded before this file.
-const api = (operation, args) => window.opendoorTransport(operation, args || {});
+const send = (operation, args) => window.opendoorTransport(operation, args || {});
+// operations that are the person's own doing, so that triggers may run and print
+const WATCHED = new Set(["set_values", "set_value_many", "user_event"]);
+const api = async (operation, args) => {
+  if (!WATCHED.has(operation)) return send(operation, args);
+  let failed = true;
+  try {
+    const reply = await send(operation, args);
+    failed = false;
+    return reply;
+  } finally {
+    const { text } = await send("trigger_output");
+    // after the caller has shown its own message
+    if (text) setTimeout(() => say(`Trigger: ${text}`, failed), 50);
+  }
+};
 
 function say(text, isError) {
   $("message").textContent = text;
@@ -301,9 +316,25 @@ async function readModule(id) {
   return api("module", { module: id, show_deleted: S.showDeleted });
 }
 
+// for the places that move the current object without a click on it
+async function syncTo(absno) {
+  if (S.data && S.data.watched && S.data.watched.sync) await api("user_event", { module: S.moduleId, absno });
+}
+const syncNotRun = () => {
+  if (S.data && S.data.watched && S.data.watched.sync) {
+    say("Sync triggers did not run for this object: whether DOORS runs them here is not documented.");
+  }
+};
+
 async function openModule(id, absno) {
   const entering = S.moduleId !== id;
-  const data = await readModule(id);
+  let data = await readModule(id);
+  if (entering && data.watched && data.watched.open) {
+    // a pre-open trigger may refuse, and then the module does not open
+    const { note } = await api("user_event", { module: id });
+    data = await readModule(id);
+    if (note) setTimeout(() => say(note), 100);
+  }
   if (S.moduleId !== id) {
     resetView();
     S.readOnly = false;
@@ -313,6 +344,7 @@ async function openModule(id, absno) {
   S.data = data;
   // each opening for editing is a history session
   if (entering && current() && !S.openingReadOnly) await api("record_session", { module: id });
+  if (!entering && absno !== S.selected && data.rows.some((r) => r.absno === absno)) await syncTo(absno);
   S.selected = data.rows.some((r) => r.absno === absno) ? absno : (data.rows[0] || {}).absno ?? null;
   S.picks = new Set();
   await computeLayoutCells();
@@ -347,6 +379,7 @@ async function goTo(module, absno) {
   }
   clearFilters();
   if (module === S.moduleId) {
+    if (absno !== S.selected) await syncTo(absno);
     S.selected = absno;
     S.picks = new Set();
     render();
@@ -638,6 +671,8 @@ function renderRow(row, attributeColumns, extra) {
     class: className,
     ondblclick: editable ? (e) => { e.stopPropagation(); editCell(row, name, e.currentTarget); } : null,
   }, content);
+  // a formatted value as elements, any other as its text
+  const shown = (name, value) => (row.rich?.[name] ? richNodes(row.rich[name]) : value);
 
   const arrow = (direction, mark, list) => (list.length && S.arrows ? h("button", { type: "button", class: "mark " + direction,
     title: `${list.length} ${direction}-link(s)`, onclick: (e) => arrowMenu(e, row, direction),
@@ -659,9 +694,9 @@ function renderRow(row, attributeColumns, extra) {
     h("span", { class: "number" }, row.number),
     more ? h("span", { class: "collapsed", title: "Has objects below the level shown" }, "> ") : null,
     S.collapsed.has(row.absno) ? h("span", { class: "collapsed", title: "Collapsed: objects below are hidden" }, "[+] ") : null,
-    heading ? part("Object Heading", "heading", heading) : null,
-    !heading && !text && short ? part("Object Short Text", "short", short) : null,
-    h("div", { class: "text" }, S.outlining ? "" : text)));
+    heading ? part("Object Heading", "heading", shown("Object Heading", heading)) : null,
+    !heading && !text && short ? part("Object Short Text", "short", shown("Object Short Text", short)) : null,
+    h("div", { class: "text" }, S.outlining ? "" : shown("Object Text", text))));
   if (S.outlining || (heading && !text)) main.querySelector(".text").style.minHeight = "0";
 
   return h("tr", {
@@ -669,13 +704,13 @@ function renderRow(row, attributeColumns, extra) {
       S.picks.has(row.absno) ? "chosen" : "", starts ? "linkstart" : ""].join(" "),
     "data-absno": row.absno,
     onmousedown: (e) => {
-      if (e.shiftKey && !e.target.closest("input, textarea, select")) {
+      if (e.shiftKey && !e.target.closest("input, textarea, select, .richbox")) {
         e.preventDefault(); // not a text selection
         extendSelection(row.absno);
       } else if (e.button === 0 || !S.picks.has(row.absno)) select(row.absno);
     },
     oncontextmenu: (e) => {
-      if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
+      if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT" || e.target.closest(".richbox")) return;
       e.preventDefault();
       if (!S.picks.has(row.absno)) select(row.absno);
       showMenu(objectMenu(), e.clientX, e.clientY);
@@ -706,7 +741,7 @@ function attributeCell(row, name, label, editable, style) {
     ...(calculated ? { title: "Calculated by attribute DXL: read only" } : {}),
     ondblclick: calculated ? () => say(`${name} is calculated by attribute DXL and cannot be edited.`)
       : editable && attribute(name) ? (e) => editCell(row, name, e.currentTarget) : null,
-  }, cellText(row, name));
+  }, row.rich?.[name] ? richNodes(row.rich[name]) : cellText(row, name));
 }
 
 // The properties panel is kept while an edit is saved: bring its calculated values up to date.
@@ -780,6 +815,18 @@ function select(absno) {
     }
   }
   if (S.selected === absno) return;
+  // an object sync trigger runs as the current object changes, and may refuse
+  if (S.data && S.data.watched && S.data.watched.sync && absno !== null) {
+    act(async () => {
+      await api("user_event", { module: S.moduleId, absno });
+      choose(absno);
+    });
+    return;
+  }
+  choose(absno);
+}
+
+function choose(absno) {
   // Let an open editor save (for the object it belongs to) before the panel is rebuilt.
   if (document.activeElement && $("props").contains(document.activeElement)) document.activeElement.blur();
   S.selected = absno;
@@ -790,6 +837,10 @@ function select(absno) {
   showStatus();
   markOutline();
 }
+
+// whether values of this attribute can carry formatting
+const takesFormatting = (definition) => !!definition && !definition.dxl
+  && (definition.base === "String" || definition.base === "Text");
 
 // An input for one attribute value, and a way to read it back as stored text.
 function valueInput(definition, value) {
@@ -814,37 +865,77 @@ function editCell(row, name, holder) {
   if (holder.querySelector(".editor")) return;
   const before = row.values[name] || "";
   const shown = [...holder.childNodes];
-  const [input, read] = valueInput(attribute(name), before);
-  input.classList.add("editor");
-  let done = false;
+  const formatted = row.rich?.[name] || null;
+  let input, read, control, done = false;
   const finish = (save) => {
     if (done) return;
     done = true;
     const value = read();
+    const doc = typeof value === "string" ? null : value;
     // Unchanged: put the cell back without rebuilding the page under the next click.
-    if (!save || value === before) return holder.replaceChildren(...shown);
+    const same = doc ? JSON.stringify(doc) === JSON.stringify(start) : value === before;
+    if (!save || same) return holder.replaceChildren(...shown);
     act(async () => {
       try {
-        await setValue(S.moduleId, row.absno, name, before, value);
+        if (doc) await setFormatted(S.moduleId, row.absno, name, before, formatted, doc);
+        else await setValue(S.moduleId, row.absno, name, before, value);
       } finally {
         await refresh();
       }
     });
   };
-  input.addEventListener("blur", () => finish(true));
-  input.addEventListener("keydown", (e) => {
+  let start = null; // the formatting editor's document as it opened
+  const keys = (e) => {
     e.stopPropagation();
     if (e.key === "Escape") finish(false);
     else if (e.key === "Enter" && (e.ctrlKey || e.metaKey || input.tagName === "INPUT")) { e.preventDefault(); finish(true); }
-  });
-  input.addEventListener("mousedown", (e) => e.stopPropagation());
-  input.addEventListener("dblclick", (e) => e.stopPropagation());
+  };
+  const listen = () => {
+    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("keydown", (e) => { e.stopPropagation(); keys(e); });
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("dblclick", (e) => e.stopPropagation());
+  };
   // pressing a button must not first take the focus away: that saves
   const commit = (label, save) => h("button", { type: "button", onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); },
     onclick: (e) => { e.stopPropagation(); finish(save); }, ondblclick: (e) => e.stopPropagation() }, label);
-  holder.replaceChildren(input, h("span", { class: "commit" }, commit("Accept", true), commit("Discard", false)));
-  input.focus();
-  say("Editing " + name + ". Ctrl+Enter or click away saves; Esc cancels.");
+  const format = () => {
+    const typed = input.value;
+    const old = input;
+    control = null; // removing a box with the focus blurs it, which must not save
+    old.remove();
+    rich(typed === before && formatted ? formatted : richDoc(typed));
+  };
+  const place = () => {
+    const button = input.tagName === "TEXTAREA" && takesFormatting(attribute(name))
+      ? h("button", { type: "button", class: "switch", onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); },
+        onclick: (e) => { e.stopPropagation(); format(); }, ondblclick: (e) => e.stopPropagation() }, "Format") : null;
+    holder.replaceChildren(control, h("span", { class: "commit" }, commit("Accept", true), commit("Discard", false), button));
+    input.focus();
+    say("Editing " + name + ". Ctrl+Enter or click away saves; Esc cancels.");
+  };
+  const rich = (doc) => {
+    const [box, area, take] = richEditor(doc, name);
+    box.classList.add("editor");
+    [control, input, read] = [box, area, take];
+    start = formatted || richDoc(before);
+    listen();
+    place();
+  };
+  if (formatted) {
+    rich(formatted);
+    start = read();
+  } else {
+    [input, read] = valueInput(attribute(name), before);
+    input.classList.add("editor");
+    control = input;
+    // the box is taken out when Format replaces it, which must not count as leaving it
+    input.addEventListener("blur", () => { if (input === control) finish(true); });
+    input.addEventListener("keydown", (e) => { e.stopPropagation(); keys(e); });
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("dblclick", (e) => e.stopPropagation());
+    place();
+  }
 }
 
 function editMain() {
@@ -857,6 +948,12 @@ function editMain() {
   const holder = tr.querySelector(name === "Object Heading" ? ".heading" : ".text");
   if (!holder) return say("This view has no main column. Edit the text in Properties, or choose Standard view.", true);
   editCell(row, name, holder);
+}
+
+// the current object's heading or text, in the formatting editor
+function formatMain() {
+  editMain();
+  document.querySelector("#main tr.picked .commit button.switch")?.click();
 }
 
 // ---------------------------------------------------------------- object properties
@@ -878,6 +975,7 @@ function renderProps() {
       return h("label", {}, `${a.name} (calculated by DXL)`, box);
     }
     let held = row.values[a.name] || "";
+    if (row.rich?.[a.name]) return formattedField(a.name, row.rich[a.name], held);
     const [input, read] = valueInput(a, held);
     input.disabled = !editable;
     input.addEventListener("change", () => act(async () => {
@@ -893,8 +991,35 @@ function renderProps() {
       if (module === S.moduleId) await refresh({ keepProps: true });
       say("Saved " + a.name);
     }));
-    return h("label", {}, a.name, input);
+    const format = editable && takesFormatting(a) ? h("button", { type: "button", class: "format",
+      title: `Format ${a.name}`, onmousedown: (e) => e.preventDefault(),
+      onclick: (e) => { e.preventDefault(); field.replaceWith(formattedField(a.name, null, input.value, held)); } },
+    "Format") : null;
+    const field = h("div", { class: "field" }, h("label", {}, a.name, input), format);
+    return field;
   });
+
+  // a formatting editor in the panel, saved when the focus leaves it
+  function formattedField(name, formatted, text, stored = text) {
+    const [box, area, read] = richEditor(formatted || richDoc(text), name);
+    if (!editable) area.contentEditable = "false";
+    let held = stored, kept = formatted, start = JSON.stringify(formatted ? read() : richDoc(stored));
+    area.addEventListener("keydown", (e) => e.stopPropagation());
+    area.addEventListener("blur", () => act(async () => {
+      const doc = read();
+      if (!editable || JSON.stringify(doc) === start) return;
+      try {
+        await setFormatted(module, absno, name, held, kept, doc);
+      } catch (e) {
+        renderProps(); // show the stored value again
+        throw e;
+      }
+      [held, kept, start] = [richPlain(doc), doc, JSON.stringify(doc)];
+      if (module === S.moduleId) await refresh({ keepProps: true });
+      say("Saved " + name);
+    }));
+    return h("div", { class: "field" }, h("span", { class: "name" }, name), box);
+  }
 
   const links = (list, outgoing) => list.map((link) => {
     const source = { module: link.source.module, absno: link.source.absno };
@@ -950,6 +1075,7 @@ const addObject = (where) => act(async () => {
   S.selected = made.absno;
   S.props = true;
   await refresh();
+  syncNotRun();
   scrollToSelected();
   const first = $("props").querySelector("textarea");
   if (first) first.focus();
@@ -1874,7 +2000,7 @@ document.addEventListener("mousedown", (e) => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeMenus();
-  if (e.target.closest("input, textarea, select, button, dialog, #dxl") || e.ctrlKey || e.metaKey || e.altKey || !S.data) return;
+  if (e.target.closest("input, textarea, select, button, dialog, #dxl, .richbox") || e.ctrlKey || e.metaKey || e.altKey || !S.data) return;
   const keys = {
     ArrowDown: () => step(1), ArrowUp: () => step(-1), F2: editMain, Enter: showProps,
     Insert: () => addObject(e.shiftKey ? "child" : selectedRow() ? "after" : "end"), Delete: deleteObject,
@@ -1904,9 +2030,23 @@ for (const [event, printing] of [["beforeprint", true], ["afterprint", false]]) 
 
 // The scripts after this one define names the first drawing needs, and menus.js,
 // loaded last, builds the menu bar: start only once every script has run.
+const START_WAIT_SECONDS = 30; // then say so, and go on waiting: a slow network is not a failure
+
+const startNotice = (text) => $("main").replaceChildren(h("p", { class: "empty", role: "alert" }, text));
+
 window.addEventListener("DOMContentLoaded", () => act(async () => {
-  await loadTree();
-  S.tree.children.forEach((c) => S.expanded.add(c.id));
-  renderTree();
-  render();
+  const slow = setTimeout(() => startNotice(
+    "Still loading: OpenDoor's engine has not answered. If this does not change, reload the page."),
+  START_WAIT_SECONDS * 1000);
+  try {
+    await loadTree();
+    S.tree.children.forEach((c) => S.expanded.add(c.id));
+    renderTree();
+    render();
+  } catch (e) {
+    startNotice("OpenDoor could not start: " + e.message);
+    throw e;
+  } finally {
+    clearTimeout(slow);
+  }
 }));

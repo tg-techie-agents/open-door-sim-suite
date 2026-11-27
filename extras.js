@@ -450,6 +450,18 @@ async function setValue(module, absno, name, before, value) {
   else rememberValues(`edit of ${name}`, module, [{ absno, name, before, after: value }]);
 }
 
+// The same for a value given with its formatting; `kept` is what it had, or null.
+async function setFormatted(module, absno, name, before, kept, doc) {
+  const reply = await api("set_values", { module, absno, rich: { [name]: doc } });
+  if (reply && reply.made_own.includes(name)) {
+    say(`${name} now has its own value here instead of the inherited one. Undo cannot reverse that.`);
+  } else {
+    // Undo gives back the formatting too; the engine reads it from these paragraphs
+    rememberValues(`edit of ${name}`, module,
+      [{ absno, name, before, after: richPlain(doc), doc: kept || undefined }]);
+  }
+}
+
 // ---------------------------------------------------------------- clipboard
 
 // Copy takes the current object alone unless `hierarchy`; cut, and a selection,
@@ -477,6 +489,7 @@ const paste = (where) => act(async () => {
   S.picks = new Set();
   S.selected = made.absno;
   await refresh();
+  syncNotRun();
   reveal(made.absno);
   say(clip.cut ? `Moved ${clip.id}.` : `Pasted a copy of ${clip.id}: ${made.count} object(s)`
     + (made.skipped.length ? `; not copied: ${made.skipped.join(", ")}` : "") + ".", !clip.cut && !!made.skipped.length);
@@ -487,10 +500,15 @@ const paste = (where) => act(async () => {
 const swapHeadingText = () => act(async () => {
   const row = needObject(true), module = S.moduleId;
   const heading = row.values["Object Heading"] || "", text = row.values["Object Text"] || "";
-  await api("set_values", { module, absno: row.absno, values: { "Object Heading": text, "Object Text": heading } });
+  // formatting goes across with its text, and comes back on Undo
+  const was = { "Object Heading": row.rich?.["Object Heading"], "Object Text": row.rich?.["Object Text"] };
+  const given = was["Object Heading"] || was["Object Text"]
+    ? { rich: { "Object Heading": was["Object Text"] || richDoc(text), "Object Text": was["Object Heading"] || richDoc(heading) } }
+    : { values: { "Object Heading": text, "Object Text": heading } };
+  await api("set_values", { module, absno: row.absno, ...given });
   rememberValues("swap of heading and text", module, [
-    { absno: row.absno, name: "Object Heading", before: heading, after: text },
-    { absno: row.absno, name: "Object Text", before: text, after: heading }]);
+    { absno: row.absno, name: "Object Heading", before: heading, after: text, doc: was["Object Heading"] },
+    { absno: row.absno, name: "Object Text", before: text, after: heading, doc: was["Object Text"] }]);
   await refresh();
 });
 
@@ -1286,12 +1304,12 @@ async function coveragePage() {
 // ---------------------------------------------------------------- keys
 
 document.addEventListener("keydown", (e) => {
-  if (e.altKey && e.key === "ArrowUp" && !e.target.closest("input, textarea, select, dialog")) {
+  if (e.altKey && e.key === "ArrowUp" && !e.target.closest("input, textarea, select, dialog, .richbox")) {
     e.preventDefault();
     act(upLevel);
     return;
   }
-  if (e.target.closest("input, textarea, select, dialog, #dxl, .dxlbox") || !S.data) return;
+  if (e.target.closest("input, textarea, select, dialog, #dxl, .dxlbox, .richbox") || !S.data) return;
   if (e.ctrlKey || e.metaKey) {
     const key = e.key.toLowerCase();
     // a text selection on the page is still copied as text
