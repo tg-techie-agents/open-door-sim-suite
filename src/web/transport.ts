@@ -3,7 +3,8 @@
 // Loaded before app.js; the menus it adds use app.js's own helpers.
 
 import * as boxes from "./dialogs.ts";
-import { desktop, entered } from "./host.ts";
+import { desktop, enter, entered } from "./host.ts";
+import { launcher } from "./launcher.ts";
 import type { Host } from "./host.ts";
 import { current_key, delete_database, list_databases, new_key, read_database, read_saved, use_database,
   write_saved } from "./storage.ts";
@@ -394,11 +395,19 @@ const host: Host = {
 
 document.addEventListener("DOMContentLoaded", () => {
   if (shell || leaving) return; // a window of windows.html has no desktop of its own
-  if (!document.getElementById("main")) {
+  const surface = !document.getElementById("main");
+  // The start page leads to the tool: on windows.html it opens its windows.
+  const start = () => launcher(host, () => { enter(); (window as any).opendoorShow?.(); },
+    () => { if (!surface) desktop(host); });
+  (window as any).opendoorStart = start;
+  if (surface) {
     (window as any).opendoorRedraw = desktop(host, element("surface"));
+    element("to-start").onclick = start;
+    if (!entered() && !location.search) start();
     return;
   }
-  if (!entered() || location.hash === "#desktop") desktop(host);
+  if (location.hash === "#desktop") desktop(host);
+  else if (!entered()) start();
   if (location.hash) history.replaceState(null, "", location.pathname);
   element("menubar").append(h("button", { type: "button", id: "to-desktop", onclick: () => desktop(host) }, "Desktop"));
   // The phone's way to the database tree.

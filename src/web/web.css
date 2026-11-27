@@ -276,3 +276,26 @@ div.desktop { height: 100%; }
 .desktop .tile.database .main::before { width: 36px; height: 36px; border-radius: 50% / 20%; background: repeating-linear-gradient(#e9c46a 0 9px, #7a5c12 9px 11px); }
 .desktop .tile.new .main::before { content: "+"; font: 700 24px/32px sans-serif; color: #1d3d40; background: #cfe3e4; }
 .desktop .tile.doors .main::before { width: 28px; background: radial-gradient(circle at 78% 55%, #ffe08a 0 3px, transparent 4px) #8b3a2b; }
+
+/* The start page: the actions in a column, beside a view of the tool. */
+dialog.launcher { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; background: var(--face); color: #111; }
+dialog.launcher[open] { display: flex; }
+.launcher nav { flex: 0 0 300px; display: flex; flex-direction: column; padding: 22px 18px; overflow: auto; background: #1d3d40; color: #fff; }
+.launcher h1 { margin: 0; font-size: 28px; }
+.launcher .tag { margin: 4px 0 20px; opacity: .85; }
+.launcher .actions { display: flex; flex-direction: column; gap: 10px; }
+.launcher .actions button { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; text-align: left; border: 2px solid #8fbfc2; border-radius: 3px; background: #2f6f73; color: #fff; }
+.launcher .actions button:hover { background: #3b868b; }
+.launcher .actions button.primary { background: #ffd966; border-color: #fff; color: #111; padding: 16px 12px; font-size: 16px; }
+.launcher .actions button span { font-size: 12px; font-weight: 400; }
+.launcher .actions button.link { border: 0; background: transparent; text-decoration: underline; font-size: 12px; padding: 4px 0; }
+.launcher .problem { color: #ffe08a; font-weight: 600; }
+.launcher main { flex: 1; min-width: 0; padding: 22px 24px; overflow: auto; }
+.launcher main > * { max-width: 760px; }
+.launcher img { display: block; width: 100%; height: auto; border: 1px solid #555; box-shadow: 0 4px 16px #0004; }
+.launcher img.narrow { max-width: 260px; }
+.launcher h2 { font-size: 17px; margin: 18px 0 6px; }
+@media (max-width: 700px) {
+  dialog.launcher[open] { display: block; overflow: auto; }
+  .launcher nav, .launcher main { overflow: visible; }
+}

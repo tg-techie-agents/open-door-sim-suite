@@ -29,7 +29,8 @@ Node.js.
 After the build, `start-mac.command` and `start-windows.bat` start it by
 double-click.
 
-The interface is a small desktop, which DOORS does not have, with DOORS in windows
+The interface opens on a start page (what this is, and what to do next), then
+a small desktop, which DOORS does not have, with DOORS in windows
 on it (on a phone: one view, with the desktop behind a Desktop button). It holds the databases kept
 in this browser, a new empty one, a database file saved earlier, the demo, and
 the open database's files. Drag text files onto it for scripts to read; what

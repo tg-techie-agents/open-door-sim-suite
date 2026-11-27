@@ -41,6 +41,15 @@ export function entered(): boolean {
 // For windows.html: has this tab already gone into a database?
 (globalThis as any).opendoorEntered = entered;
 
+// A database has been chosen in this tab: a reload goes back to the work.
+export function enter(): void {
+  try {
+    sessionStorage.setItem(ENTERED, "yes");
+  } catch {
+    // a reload then starts at the start page again
+  }
+}
+
 const short = (path: string) => path.replace(/^\/work\//, "");
 
 // Over the whole page (narrow screens), or as the `surface` behind the windows
@@ -53,17 +62,15 @@ export function desktop(host: Host, surface: HTMLElement | null = null): () => P
   const back = h("button", { type: "button", class: "primary back", hidden: true, onclick: () => leave() }, "Back to DOORS");
   const box = h(surface ? "div" : "dialog", { class: "desktop", "aria-label": "Desktop" },
     h("div", { class: "desk" },
-      h("header", {}, h("h1", {}, "OpenDoor desktop"), back),
+      h("header", {}, h("h1", {}, "OpenDoor desktop"), h("span", {},
+        surface ? null : h("button", { type: "button", onclick: () => { box.remove(); (window as any).opendoorStart(); } }, "Start page"),
+        " ", back)),
       h("p", {}, "A practice tool for DOORS and DXL; not DOORS. Made-up data only. Everything stays in this browser, "
         + "which can lose it: save a database to a file to keep a copy."),
       problem,
       h("h2", {}, "Databases"), databases, files));
   const leave = () => {
-    try {
-      sessionStorage.setItem(ENTERED, "yes");
-    } catch {
-      // a reload then starts at the bare desktop
-    }
+    enter();
     if (surface) (window as any).opendoorShow();
     else box.remove();
   };
