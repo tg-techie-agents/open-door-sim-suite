@@ -1,8 +1,5 @@
 /* The app inside a window of windows.html. */
 body.win #notice, body.win #tree-toggle, body.win #to-desktop { display: none; }
-#to-windows { margin-left: auto; font-weight: 700; }
-#to-windows + #to-desktop { margin-left: 0; }
-@media (max-width: 700px) { #to-windows { display: none; } #to-windows + #to-desktop { margin-left: auto; } }
 body.win-module #explorer { display: none; }
 body.win-explorer #toolbar, body.win-explorer #main, body.win-explorer #outline, body.win-explorer #props, body.win-explorer #findbar { display: none !important; }
 body.win-explorer #explorer { display: block; flex: 1; width: auto; resize: none; border: 0; }
