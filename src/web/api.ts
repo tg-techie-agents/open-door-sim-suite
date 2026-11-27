@@ -7,7 +7,7 @@
 
 import { ROOT, RIGHTS, SYSTEM_ATTRIBUTES, AttrDxlError, Obj, Store, StoreError, rights_names } from "../store.ts";
 import { checked_doc, markup_of, parse, plain_of, slice, splice } from "../rich.ts";
-import { DxlError, coverage, layout, run } from "../dxl/index.ts";
+import { DxlError, check, coverage, layout, run } from "../dxl/index.ts";
 import type { DialogSession } from "../dxl/index.ts";
 import type { DialogEvent, Progress } from "../dxl/lib/dialogs.ts";
 import type { VirtualDisk } from "../dxl/files.ts";
@@ -1148,6 +1148,16 @@ export class Api {
     });
     reply.dialogs = this.dialogs && this.dialogs.spec();
     return reply;
+  }
+
+  // Find the errors a run would find before running, without running.
+  op_check({ source }: any): any {
+    try {
+      check(source, this.store, ".", this.disk);
+    } catch (e) {
+      return { error: _error(e) };
+    }
+    return { error: null };
   }
 
   // One thing a person did with a script's dialog box: its callbacks run now.

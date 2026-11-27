@@ -8,6 +8,10 @@ example modules without touching a real database.
 It is not DOORS, it has no connection with IBM, and it has never been compared
 with a running copy of DOORS. IBM, Rational, and DOORS are IBM's trademarks.
 
+**A database file saved here is not yet compatible with the native database
+format.** It does not open in DOORS, and a DOORS database or archive does not
+open here.
+
 **Use made-up data only.** Do not copy in exports, names, or scripts from a
 confidential or controlled environment, even edited ones. Check your
 organisation's rules before you take a script from here into real DOORS.
@@ -31,14 +35,18 @@ double-click.
 
 The interface opens on a start page (what this is, and what to open), then a
 small desktop, which DOORS does not have, on a phone too. OpenDoor, the saved
-databases, and the open database's files are icons on it: double-click or tap
-opens one, drag moves it, and right-click or long press offers Open, Save to
-file, and Delete. Start, on the taskbar, makes a new database, opens a saved
-one, adds files, and leads back to the start page. Drag text files onto the
-desktop for scripts to read; what scripts write appears there. A browser can
-discard what it keeps, so save to a file what matters. The demo is an invented hobby-greenhouse project
-with planted faults: missing links, a "TBD", failed tests, and edits since the
-last baseline.
+databases, and a folder of files for each database that has any are icons on it:
+double-click or tap opens one, drag moves it, and right-click or long press
+offers Open, Save to file, and Delete. Start, on the taskbar, makes a new
+database, opens a saved one, adds files, and leads back to the start page. Drag
+text files onto the desktop for scripts to read; what scripts write appears
+there. Its folder says which database a file belongs to; a file in the folder of
+a database that is not open can be copied to the open one. Opening a file shows
+what is in it. A browser can discard what it keeps, so save to a file what
+matters. The demo is an invented hobby-greenhouse project with planted faults:
+missing links, a "TBD", failed tests, and edits since the last baseline.
+
+In the browser, the DXL window's Check button does what `check` does.
 
 ## Command line
 

@@ -1,7 +1,7 @@
 // The first thing a new tab shows: what this is, and what to do next. Not part
 // of DOORS.
 import { SHOTS } from "./generated/shots.ts";
-import type { Host } from "./host.ts";
+import { type Host, NOT_NATIVE } from "./host.ts";
 
 // base.js's globals.
 declare function h(tag: string, props?: any, ...children: any[]): any;
@@ -62,7 +62,7 @@ export async function launcher(host: Host, entered: () => void): Promise<void> {
     if (file) open(file);
   });
 
-  let kept: { key: string; name: string; open: boolean }[] = [];
+  let kept: { key: string; name: string; open: boolean; demo?: boolean }[] = [];
   try {
     kept = await host.databases();
   } catch (e: any) {
@@ -73,8 +73,10 @@ export async function launcher(host: Host, entered: () => void): Promise<void> {
     h("button", { type: "button", class: primary ? "primary" : "", onclick }, title);
   actions.replaceChildren(
     ...(last ? [action(`Continue "${last.name}"`, () => attempt(() => host.open(last.key)), true)] : []),
-    action("Open the demo", () => attempt(host.demo), !last),
+    // An untouched demo is what Continue already opens.
+    ...(last?.demo ? [] : [action("Open the demo", () => attempt(host.demo), !last)]),
     action("Start an empty database", create),
-    action("Open a database file", () => chooseFile(".json,application/json", open)));
+    h("button", { type: "button", onclick: () => chooseFile(".json,application/json", open) },
+      "Open a database file", h("small", {}, NOT_NATIVE)));
   actions.querySelector("button.primary").focus();
 }

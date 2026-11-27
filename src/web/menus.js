@@ -606,6 +606,8 @@ function helpPage() {
       + "What DXL runs is on its own page: Help, DXL coverage."),
     h("p", {}, "It is not DOORS, it has no connection with IBM, and it has never been compared with a running copy "
       + "of DOORS. IBM, Rational, and DOORS are IBM's trademarks."),
+    h("p", {}, "A database file saved here is not yet compatible with the native database format: it does not open "
+      + "in DOORS, and a DOORS database or archive does not open here."),
     h("div", { class: "cov-controls" }, search, " ", kind), holder));
   box.problem.closest("dialog").classList.add("page");
 }

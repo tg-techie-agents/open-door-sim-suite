@@ -3,7 +3,7 @@
 // Loaded before app.js; the menus it adds use app.js's own helpers.
 
 import * as boxes from "./dialogs.ts";
-import { desktop, enter, entered } from "./host.ts";
+import { desktop, enter, entered, NOT_NATIVE } from "./host.ts";
 import { launcher } from "./launcher.ts";
 import type { Host } from "./host.ts";
 import { current_key, delete_database, list_databases, new_key, read_database, read_saved, use_database,
@@ -54,6 +54,25 @@ if (leaving) location.replace("windows.html" + location.search);
 
 const element = (id: string) => document.getElementById(id)!;
 const stop_button = element("stop"); // kept here: it moves between the page and dialogs
+
+// The demo as it was first opened, if nothing in it has changed: opening the demo
+// again goes back to it instead of keeping another copy.
+const FRESH_DEMO = "opendoor-fresh-demo:" + new URL(".", globalThis.location?.href ?? "http://localhost/").pathname;
+function fresh_demo(): string | null {
+  try {
+    return localStorage.getItem(FRESH_DEMO);
+  } catch {
+    return null;
+  }
+}
+function set_fresh_demo(key: string | null): void {
+  try {
+    if (key) localStorage.setItem(FRESH_DEMO, key);
+    else localStorage.removeItem(FRESH_DEMO);
+  } catch {
+    // the demo is then opened as a new copy each time
+  }
+}
 
 function storage_problem(e: any): void {
   unsaved = true;
@@ -204,7 +223,11 @@ async function perform(operation: string, args: any): Promise<any> {
       : { error, output: e.output, unsaved: [], rolled_back: Boolean(args.dry_run), discarded: true, files: [],
         dialogs: null };
   }
-  if (reply.snapshot) await keep(reply.snapshot);
+  if (reply.snapshot) {
+    // Opening and closing modules is also written down; that is not the person's change.
+    if (current_key() === fresh_demo() && operation !== "user_event" && operation !== "record_session") set_fresh_demo(null);
+    await keep(reply.snapshot);
+  }
   if (reply.not_saved) storage_problem(new Error(reply.not_saved));
   if (reply.error !== undefined) throw new Error(reply.error);
   return reply.result;
@@ -237,9 +260,10 @@ const send_event: boxes.Send = (session, event) => in_turn(() => perform("dxl_ev
 // -- the databases as wholes -------------------------------------------------
 
 // Start again from `snapshot` (null: the demo, or empty if named) and show it,
-// as the record `key`. An untouched demo is not kept. If it cannot be opened,
-// what was there stays.
-async function replace_database(key: string, snapshot: Snapshot | null, empty: string | null = null): Promise<void> {
+// as the record `key`. The demo that stands in unasked is not kept. If it cannot
+// be opened, what was there stays.
+async function replace_database(key: string, snapshot: Snapshot | null, empty: string | null = null,
+  keep_demo = false): Promise<void> {
   // windows.html has windows on the database being left: what is being typed in
   // them is saved to it first, and then they close.
   await (window as any).opendoorFlush();
@@ -256,7 +280,7 @@ async function replace_database(key: string, snapshot: Snapshot | null, empty: s
       const fresh = await start_worker(snapshot, empty, demo);
       ready = Promise.resolve();
       use_database(key, rev);
-      if (snapshot || empty !== null) await keep(fresh ?? snapshot!, true);
+      if (snapshot || empty !== null || keep_demo) await keep(fresh ?? snapshot!, true);
       else {
         last = fresh;
         kept = false;
@@ -295,7 +319,8 @@ async function read_file(file: File): Promise<Snapshot> {
     data = null;
   }
   if (data?.format !== "opendoor-browser" || data.version !== 1 || typeof data.dump !== "string") {
-    throw new Error(`${file.name} is not a database saved from this page.`);
+    throw new Error(`${file.name} is not a database saved from this page. Database files here are not yet compatible `
+      + "with the native database format.");
   }
   return { dump: data.dump, database: file.name.replace(/\.opendoor\.json$|\.json$/i, ""),
     files: Array.isArray(data.files) ? data.files : [] };
@@ -314,7 +339,8 @@ const is_open = (key: string) => key === current_key() && kept;
 const host: Host = {
   databases: () => in_turn(async () => {
     await engine().catch(() => {}); // a database that cannot be opened is still listed
-    return (await list_databases()).map((d) => ({ ...d, open: is_open(d.key) && ready !== null }));
+    return (await list_databases()).map((d) => ({ ...d, open: is_open(d.key) && ready !== null,
+      demo: d.key === fresh_demo() }));
   }),
   async open(key) {
     if (is_open(key) && ready) return;
@@ -322,7 +348,13 @@ const host: Host = {
     if (!saved) throw new Error("That database is no longer kept in this browser.");
     await replace_database(key, saved.snapshot);
   },
-  demo: () => replace_database(new_key(), null),
+  async demo() {
+    const had = fresh_demo();
+    if (had && await read_database(had)) return host.open(had);
+    const key = new_key();
+    await replace_database(key, null, null, true);
+    set_fresh_demo(key);
+  },
   create: async (name) => replace_database(new_key(), null, await free_name(name)),
   async add_database(file) {
     const snapshot = await read_file(file);
@@ -336,7 +368,7 @@ const host: Host = {
     download(name, JSON.stringify({ format: "opendoor-browser", version: 1, dump: snapshot.dump, files: snapshot.files }),
       "application/json");
     if (key === current_key()) unsaved = false;
-    say("Saved " + name);
+    say(`Saved ${name}. ${NOT_NATIVE}.`);
   },
   async remove(key) {
     const open = key === current_key();
@@ -345,7 +377,12 @@ const host: Host = {
     if (open) await replace_database(new_key(), null);
   },
   files: async () => (await current_snapshot()).files,
+  files_of: async (key) => (is_open(key) && ready ? (await current_snapshot()).files
+    : (await read_database(key))?.snapshot.files ?? []),
   async add_file(file) {
+    if (/\.(dma|dpa|dar|dmp|dup)$/i.test(file.name)) {
+      throw new Error(`${file.name} cannot be opened: this is not yet compatible with the native database format.`);
+    }
     if (file.size > MAX_FILE) throw new Error(`${file.name} is too large: files up to 5 MB are kept.`);
     const bytes = await file.arrayBuffer();
     if (new Uint8Array(bytes).includes(0)) {
