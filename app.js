@@ -29,10 +29,13 @@ const api = async (operation, args) => {
     const reply = await send(operation, args);
     failed = false;
     return reply;
+  } catch (e) {
+    if (/^the triggers? /.test(e.message)) e.message += ". Tools, Triggers... lists and removes triggers";
+    throw e;
   } finally {
     const { text } = await send("trigger_output");
     // after the caller has shown its own message
-    if (text) setTimeout(() => say(`Trigger: ${text}`, failed), 50);
+    if (text) setTimeout(() => say(`Trigger: ${text}`, failed || text.includes("could not run here")), 50);
   }
 };
 
@@ -326,12 +329,24 @@ const syncNotRun = () => {
   }
 };
 
-async function openModule(id, absno) {
+// `unwatched`: without the open triggers, this suite's own way past one that
+// keeps a module shut.
+async function openModule(id, absno, unwatched) {
   const entering = S.moduleId !== id;
   let data = await readModule(id);
-  if (entering && data.watched && data.watched.open) {
+  if (entering && !unwatched && data.watched && data.watched.open) {
     // a pre-open trigger may refuse, and then the module does not open
-    const { note } = await api("user_event", { module: id });
+    say("Running the open triggers (each is stopped after 5 seconds)...");
+    let note;
+    try {
+      ({ note } = await api("user_event", { module: id }));
+    } catch (e) {
+      confirmDialog("A trigger kept the module shut",
+        `${e.message}. Open it this once without running its open triggers?`, "Open without triggers",
+        () => act(async () => { await openModule(id, absno, true); renderTree(); }));
+      throw e;
+    }
+    say("");
     data = await readModule(id);
     if (note) setTimeout(() => say(note), 100);
   }

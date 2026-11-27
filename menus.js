@@ -191,7 +191,7 @@ const FEATURES = {
   linkSettings: ["Links", "Link module rules...", "part", "default linkset pairings and link limits, kept per folder (also from Module properties, Linksets); both modules must already exist"],
   defaultLink: ["Links", "Set default link module...", "full", ""],
   linksets: ["Links", "New and delete linkset", "part", "deleting a linkset deletes its links; no new single link from this window", "open a link module"],
-  triggers: ["DXL", "Triggers...", "no", "no screen for it: a script defines module open, object sync and attribute save triggers, and they run for what you do here"],
+  triggers: ["DXL", "Triggers...", "part", "lists every stored trigger with its DXL, and removes one. A script defines them (module open, object sync, attribute save), and they run for what you do here"],
   // analysis
   wizard: ["Traceability", "Traceability wizard...", "part", "writes layout DXL columns; run here only, not checked in DOORS"],
   traceColumns: ["Traceability", "Traceability columns...", "full", ""],
@@ -527,7 +527,7 @@ const MENUS = {
     SUB("Change proposals", [X("proposals")]),
     X("testTracking"),
     X("signatures"),
-    X("triggers"),
+    M("triggers", triggersDialog),
     SUB("Other", [X("users"), X("manageLocks"), X("sharing"), X("spelling"), X("markup"), X("partitions")]),
   ],
   Favourites: () => [
