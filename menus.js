@@ -232,6 +232,9 @@ const FEATURES = {
   // help
   helpPage: ["Help", "What this tool does and does not do...", "full", ""],
   keys: ["Help", "Keys and markers...", "full", ""],
+  dxlFunctions: ["Help", "DXL functions...", "full", ""],
+  projectFormat: ["Help", "Project file format (new tab)", "full", ""],
+  aiGuide: ["Help", "Guide for AI assistants (new tab)", "full", ""],
 };
 
 const STATUS_NAMES = { full: "Full", part: "Partial", no: "Not offered" };
@@ -537,9 +540,33 @@ const MENUS = {
   Help: () => [
     M("helpPage", () => helpPage()),
     M("dxlCoverage", () => coveragePage()),
+    M("dxlFunctions", functionsPage),
+    M("projectFormat", () => { window.open("project-format.txt", "_blank", "noopener"); }),
+    M("aiGuide", () => { window.open("guide-for-ai-agents.txt", "_blank", "noopener"); }),
     M("keys", keysDialog),
   ],
 };
+
+async function functionsPage() {
+  const all = await api("dxl_functions");
+  const search = h("input", { type: "search", placeholder: "Name or type, e.g. link", "aria-label": "Search the functions" });
+  const count = h("p", {});
+  const list = h("pre", { class: "viewer" });
+  const draw = () => {
+    const want = search.value.toLowerCase();
+    const shown = all.filter((line) => line.toLowerCase().includes(want));
+    count.textContent = `${shown.length} of ${all.length} signatures`
+      + (shown.length ? "" : ": this engine does not offer it");
+    list.textContent = shown.join("\n");
+  };
+  search.addEventListener("input", draw);
+  draw();
+  const box = dialog("DXL functions this engine offers", h("div", {},
+    h("p", {}, "What is not listed is refused by name. A listed function is not proof that it behaves as in DOORS: "
+      + "see Help, DXL coverage, and check it there."),
+    search, count, list));
+  box.problem.closest("dialog").classList.add("page");
+}
 
 function keysDialog() {
   dialog("Keys and markers", listTable(["Key or mark", "Meaning"], [
