@@ -1902,10 +1902,11 @@ for (const [event, printing] of [["beforeprint", true], ["afterprint", false]]) 
   });
 }
 
-// menus.js, loaded last, builds the menu bar.
-act(async () => {
+// The scripts after this one define names the first drawing needs, and menus.js,
+// loaded last, builds the menu bar: start only once every script has run.
+window.addEventListener("DOMContentLoaded", () => act(async () => {
   await loadTree();
   S.tree.children.forEach((c) => S.expanded.add(c.id));
   renderTree();
   render();
-});
+}));
