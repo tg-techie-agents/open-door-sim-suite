@@ -71,6 +71,25 @@ test("the worker answers bad requests and carries on, and what it saves can be r
   assert.ok(call("tree").result.root.children.some((c: any) => c.name === "Kept"));
 });
 
+test("a database that cannot be written out is said to be unsaved, and the engine keeps it", async (t) => {
+  const posted: any[] = [];
+  const scope: any = { postMessage: (message: any) => posted.push(message) };
+  t.after(put_global("self", scope));
+  await import("../src/web/worker.ts?unwritable" as string);
+  const { Store } = await import("../src/store.ts");
+  const send = (message: any) => { scope.onmessage({ data: message }); return posted.at(-1); };
+  send({ type: "init", snapshot: null });
+  t.mock.method(Store.prototype, "dumps", () => { throw new RangeError("Invalid string length"); });
+  t.mock.method(console, "error", () => {});
+  const made = send({ type: "call", id: 1, operation: "create_item", args: { parent: 1, name: "Kept", kind: "folder" } });
+  assert.equal(made.error, undefined);
+  assert.equal(made.snapshot, undefined);
+  assert.match(made.not_saved, /Invalid string length/);
+  assert.match(send({ type: "save", id: 2 }).error, /Invalid string length/);
+  const tree = send({ type: "call", id: 3, operation: "tree", args: {} });
+  assert.ok(tree.result.root.children.some((c: any) => c.name === "Kept"));
+});
+
 test("a script that never ends is stopped after the time limit, and the next call works", async (t) => {
   const workers: any[] = [];
   const snapshot = { dump: "saved", database: "demo", files: [] };

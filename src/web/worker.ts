@@ -70,7 +70,14 @@ scope.onmessage = ({ data }: any) => {
     return;
   }
   if (data.type === "save") {
-    scope.postMessage({ type: "reply", id: data.id, result: snapshot() });
+    const saved: any = { type: "reply", id: data.id };
+    try {
+      saved.result = snapshot();
+      scope.postMessage(saved);
+    } catch (e) {
+      // a throw out of here would stop the engine, and what it holds with it
+      scope.postMessage({ type: "reply", id: data.id, error: describe(e) });
+    }
     return;
   }
   const { id, operation, args } = data;
@@ -84,11 +91,25 @@ scope.onmessage = ({ data }: any) => {
     const result = (api as any)[name](args);
     // Through JSON, so the page gets plain data.
     reply.result = result === undefined ? null : JSON.parse(JSON.stringify(plain_result(result)));
-    if (CHANGES.has(operation)) reply.snapshot = snapshot();
   } catch (e) {
     reply.error = describe(e);
   }
+  // The change has been made. A database too big to write out must say so, not
+  // look like a failed change.
+  if (CHANGES.has(operation) && reply.error === undefined) {
+    try {
+      reply.snapshot = snapshot();
+    } catch (e) {
+      reply.not_saved = describe(e);
+    }
+  }
   api.on_output = null;
   api.on_progress = null;
-  scope.postMessage(reply);
+  try {
+    scope.postMessage(reply);
+  } catch (e) {
+    // no room to copy the database to the page
+    delete reply.snapshot;
+    scope.postMessage({ ...reply, not_saved: describe(e) });
+  }
 };

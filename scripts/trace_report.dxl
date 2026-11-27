@@ -17,8 +17,8 @@ string csv(string s) {
     string result = "\""
     // A spreadsheet runs a cell that starts like a formula.
     if (length(s) > 0) {
-        string first = s[0:0]
-        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+        string lead = s[0:0]
+        if (lead == "=" || lead == "+" || lead == "-" || lead == "@" || lead == "\t" || lead == "\r" || lead == "\n") result = result "'"
     }
     int i
     for (i = 0; i < length(s); i++) {
@@ -42,7 +42,7 @@ int requirements = 0, unlinked = 0, notPassed = 0, good = 0, unopened = 0
 // The requirement being reported.
 bool writing = false
 int links = 0, failing = 0
-string prefix = "", verdict = ""
+string rowStart = "", verdict = ""
 
 // Called once to count a linked item, then again to write its row.
 void visit(Object linked) {
@@ -59,7 +59,7 @@ void visit(Object linked) {
             }
         }
         if (writing) {
-            out << prefix csv(verdict) "," csv(identifier(linked)) "," csv(fullName(module(linked))) "," csv(status) "\n"
+            out << rowStart csv(verdict) "," csv(identifier(linked)) "," csv(fullName(module(linked))) "," csv(status) "\n"
         } else {
             links++
             if (status != PASS_VALUE) failing++
@@ -76,9 +76,24 @@ void eachLink(Object o) {
     }
 }
 
+// DOORS does not allow a module that is open in one mode to be opened in another
+// inside a for loop, so only read() what is not open yet.
+bool isReady(ModName_ wanted) {
+    if (open wanted) return true
+    return !null read(fullName(wanted), false)
+}
+
+// The module at a path: the one already open, in whatever mode, else read().
+Module moduleAt(string path) {
+    ModName_ named = module(path)
+    if (null named) return null
+    if (open named) return data(moduleVersion(named))
+    return read(path, false)
+}
+
 // DOORS only sees a link's far end once the module that holds it is open.
 void openModule(ModName_ other) {
-    if (null read(fullName(other), false)) {
+    if (!isReady(other)) {
         print "WARNING: cannot open " fullName(other) "\n"
         unopened++
     }
@@ -96,7 +111,7 @@ void openLinked(Object o) {
 
 int m
 for (m = 0; m < sizeof(MODULES); m++) {
-    Module reqs = read(MODULES[m], false)
+    Module reqs = moduleAt(MODULES[m])
     if (null reqs) {
         print "cannot open " MODULES[m] "\n"
         halt
@@ -130,9 +145,9 @@ for (m = 0; m < sizeof(MODULES); m++) {
             good++
         }
 
-        prefix = csv(MODULES[m]) "," csv(identifier(o)) "," csv(body) ","
+        rowStart = csv(MODULES[m]) "," csv(identifier(o)) "," csv(body) ","
         if (links == 0) {
-            out << prefix csv(verdict) ",,,\n"
+            out << rowStart csv(verdict) ",,,\n"
         } else {
             writing = true
             eachLink(o)

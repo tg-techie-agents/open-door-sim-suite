@@ -174,6 +174,8 @@ export function register_hierarchy(lib: Library): void {
 
   // -- loops
   lib.add("database", [], "Database_", (rt: Runtime) => ROOT);
+  // the DOORS user, who history and "Created By" record; not the operating system's
+  lib.add("doorsname", [], "string", (rt: Runtime) => rt.store.user);
   lib.add("all", ["Folder"], "AllFolder_", (rt: Runtime, f: any) => rt.need(f, "Folder"));
   lib.loop("Folder", "Item",
     (rt: Runtime, f: any) => Array.from(rt.store.children(rt.need(f, "Folder")), (i: any) => i.id));
@@ -234,6 +236,11 @@ export function open_as(mode: string) {
       throw new Fault(`opening a link module (${name}) is not supported here`);
     }
     const fresh = !rt.opened.has(found);
+    const held = rt.opened.get(found);
+    if (held !== undefined && held !== mode && rt.for_depth) {
+      throw new Fault(`${name} is open in ${held} mode, and DOORS does not allow it to be opened in ${mode} `
+        + "mode inside a for loop: open it before the loop, or test open(ModName_) first");
+    }
     rt.open(found, mode);
     set_visible(rt, found, flags[0] !== false, fresh); // the first flag: display
     return found;
@@ -244,6 +251,10 @@ export function open_as(mode: string) {
 export function close(rt: Runtime, module_id: any, save: boolean | null = null): boolean {
   rt.need(module_id, "Module");
   if (!rt.opened.has(module_id)) return false;
+  if (save === null && rt.modified.has(module_id)) {
+    throw new Fault("whether close(m) alone saves the unsaved changes is not documented; "
+      + "save(m) first, or write close(m, true)");
+  }
   if (save === false && rt.modified.has(module_id)) {
     throw new Fault("DOORS would discard the unsaved changes here, but this stand-in has already "
       + "stored them; save() before close()");

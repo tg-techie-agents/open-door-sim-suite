@@ -167,7 +167,8 @@ function code(o: TraceOptions, from: number, to: number): string {
     line(`    for other in origin${arrow}LINK_MODULE do {`);
   }
   if (pick) line(`        if (fullName(other) != ${pick}) continue`);
-  line("        if (!isDeleted other) read(fullName(other), false)");
+  // DOORS refuses, inside a for loop, to reopen an open module in another mode.
+  line("        if (!isDeleted other && !open other) read(fullName(other), false)");
   line("    }");
   line(`    for l in origin${arrow}LINK_MODULE do {`);
   line(`        Object linked = ${outgoing ? "target" : "source"}(l)`);

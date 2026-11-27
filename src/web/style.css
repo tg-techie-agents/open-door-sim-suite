@@ -53,6 +53,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; }
 .grid th { background: var(--face); font-weight: 600; position: sticky; top: 0; z-index: 2; border-bottom-color: var(--edge); white-space: nowrap; }
 .grid td { overflow-wrap: anywhere; }
 .grid tbody tr.picked td { background: var(--pick); }
+#main.windowed { overflow-anchor: none; } /* app.js holds the place itself */
+.grid tbody tr.spacer, .grid tbody tr.spacer td { padding: 0; border: 0; min-width: 0; }
 .grid td.id { overflow-wrap: normal; white-space: nowrap; color: #333; width: 1%; }
 .grid td.main { min-width: 240px; width: 50%; }
 .grid td.attr { min-width: 90px; white-space: pre-wrap; }

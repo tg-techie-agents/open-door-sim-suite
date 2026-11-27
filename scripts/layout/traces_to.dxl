@@ -3,7 +3,10 @@
 string PARENT_LINKS = "/Greenhouse Demo/satisfies"
 
 Link l
-for l in obj->PARENT_LINKS do read(fullName(target(l)), false)
+for l in obj->PARENT_LINKS do {
+    ModName_ holder = target(l)
+    if (!open holder) read(fullName(holder), false)
+}
 
 for l in obj->PARENT_LINKS do {
     Object linked = target(l)

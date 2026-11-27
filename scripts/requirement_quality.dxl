@@ -15,8 +15,8 @@ string csv(string s) {
     string result = "\""
     // A spreadsheet runs a cell that starts like a formula.
     if (length(s) > 0) {
-        string first = s[0:0]
-        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+        string lead = s[0:0]
+        if (lead == "=" || lead == "+" || lead == "-" || lead == "@" || lead == "\t" || lead == "\r" || lead == "\n") result = result "'"
     }
     int i
     for (i = 0; i < length(s); i++) {
@@ -50,13 +50,21 @@ bool has(string haystack, string word) {
     return findPlainText(haystack, " " word " ", offset, len, false)
 }
 
+// The module at a path: the one already open, in whatever mode, else read().
+Module moduleAt(string path) {
+    ModName_ named = module(path)
+    if (null named) return null
+    if (open named) return data(moduleVersion(named))
+    return read(path, false)
+}
+
 Stream out = write OUTPUT_FILE
 out << "Module,Requirement,Requirement Text,Findings\n"
 
 int checked = 0, reported = 0
 int m, i
 for (m = 0; m < sizeof(MODULES); m++) {
-    Module reqs = read(MODULES[m], false)
+    Module reqs = moduleAt(MODULES[m])
     if (null reqs) {
         print "cannot open " MODULES[m] "\n"
         halt

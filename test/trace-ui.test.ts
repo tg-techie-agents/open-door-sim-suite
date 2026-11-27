@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { runInNewContext } from "node:vm";
 import { VirtualDisk } from "../src/dxl/files.ts";
-import { layout } from "../src/dxl/index.ts";
+import { layout, run } from "../src/dxl/index.ts";
 import { Obj, Store } from "../src/store.ts";
 import { Api, plain } from "../src/web/api.ts";
 import "../src/web/trace-ops.ts";
@@ -41,6 +41,23 @@ const sorted = (list: string[]) => [...list].sort();
 const bare = { moduleName: "" as const, attributes: [] };
 
 describe("traceability wizard DXL", () => {
+  test("a column's code runs from a module already open in edit mode", () => {
+    const store = example();
+    const needs = store.module_at(NEEDS)!, [a, b] = objects(store, NEEDS).slice(1, 3);
+    store.create_link(a, b, BASE + "satisfies"); // so a far end is the module being looked at
+    for (const direction of ["in", "out"] as const) {
+      const from = direction === "in" ? b : a;
+      const [column] = traceability_columns({ ...bare, direction, depth: 2 });
+      // display() is layout DXL only; print what it would have shown
+      const source = `Object obj = object(${from.absno}, edit("${NEEDS}", false))\n`
+        + column.dxl.replace(/display\((.*)\)$/gm, 'print $1 "\\n"');
+      let out = "";
+      run(source, store, { write: (text: string) => { out += text; return text.length; } });
+      assert.ok(ids(out).includes(store.identifier(direction === "in" ? a : b)), out);
+      assert.equal(needs, from.module_id);
+    }
+  });
+
   for (const [direction, module] of [["in", NEEDS], ["out", CHECKS]] as const) {
     test(`${direction}-links, one column per level, match the links`, () => {
       const store = example();

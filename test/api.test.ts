@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, test } from "node:test";
 import { VirtualDisk } from "../src/dxl/files.ts";
 import { Store } from "../src/store.ts";
-import { Api, MAX_OUTPUT, plain } from "../src/web/api.ts";
+import { Api, MAX_COLUMN, MAX_OUTPUT, plain } from "../src/web/api.ts";
 
 const SCRIPTS = { names: { "hello.dxl": 'print "hello\\n"\n' }, layout: { "id.dxl": "display(identifier(obj))" } };
 
@@ -233,4 +233,17 @@ describe("DXL window", () => {
       refused(/no script/, "load_script", { name });
     }
   });
+});
+
+test("a column may hold more text than a script may print, up to its own limit", () => {
+  const store = new Store();
+  const module = store.create_module("/", "m");
+  const api = new Api(store, "t", { names: {}, layout: {} }, new VirtualDisk());
+  for (let i = 0; i < 40; i++) store.create_object(module);
+  const column = (length: number) => api.op_dxl_column({ module,
+    source: `string s = "x"\nwhile (length(s) < ${length}) s = s s\ndisplay(s)\n` });
+  const wide = column(MAX_OUTPUT / 32);
+  assert.equal(wide.error, null);
+  assert.equal(Object.keys(wide.cells).length, 40);
+  assert.match(column(MAX_COLUMN / 32).error.message, /too large to show/);
 });

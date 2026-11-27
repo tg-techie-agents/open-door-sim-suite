@@ -48,8 +48,8 @@ string csv(string s) {
     string result = "\""
     // A spreadsheet runs a cell that starts like a formula.
     if (length(s) > 0) {
-        string first = s[0:0]
-        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+        string lead = s[0:0]
+        if (lead == "=" || lead == "+" || lead == "-" || lead == "@" || lead == "\t" || lead == "\r" || lead == "\n") result = result "'"
     }
     int i
     for (i = 0; i < length(s); i++) {
@@ -60,18 +60,33 @@ string csv(string s) {
     return result "\""
 }
 
+// DOORS does not allow a module that is open in one mode to be opened in another
+// inside a for loop, so only read() what is not open yet.
+bool isReady(ModName_ wanted) {
+    if (open wanted) return true
+    return !null read(fullName(wanted), false)
+}
+
+// The module at a path: the one already open, in whatever mode, else read().
+Module moduleAt(string path) {
+    ModName_ named = module(path)
+    if (null named) return null
+    if (open named) return data(moduleVersion(named))
+    return read(path, false)
+}
+
 // DOORS only sees an incoming link once the module that holds it is open.
 void openSources(Object o, string through) {
     ModName_ other
     for other in o<-through do {
-        if (null read(fullName(other), false)) {
+        if (!isReady(other)) {
             print "WARNING: cannot open " fullName(other) "\n"
         }
     }
 }
 
 // Writes one row for each linked item and returns how many there were.
-int writeLinks(Stream out, string prefix, Object o, bool incoming, string through, bool writeRows) {
+int writeLinks(Stream out, string rowStart, Object o, bool incoming, string through, bool writeRows) {
     int found = 0
     Link l
     if (incoming) {
@@ -81,12 +96,12 @@ int writeLinks(Stream out, string prefix, Object o, bool incoming, string throug
             if (null far) continue
             if (isDeleted far) continue
             found++
-            if (writeRows) out << prefix "Linked," csv(identifier(far)) "," csv(fullName(module(far))) "\n"
+            if (writeRows) out << rowStart "Linked," csv(identifier(far)) "," csv(fullName(module(far))) "\n"
         }
     } else {
         for l in o->through do {
             string farPath = fullName(target(l))
-            Module m = read(farPath, false)
+            Module m = moduleAt(farPath)
             if (null m) {
                 print "WARNING: cannot open " farPath "\n"
                 continue
@@ -95,7 +110,7 @@ int writeLinks(Stream out, string prefix, Object o, bool incoming, string throug
             if (null far) continue
             if (isDeleted far) continue
             found++
-            if (writeRows) out << prefix "Linked," csv(identifier(far)) "," csv(farPath) "\n"
+            if (writeRows) out << rowStart "Linked," csv(identifier(far)) "," csv(farPath) "\n"
         }
     }
     return found
@@ -128,7 +143,7 @@ void writeReport(DB db) {
 
     int total = 0
     for pick in modulePick do {
-        Module m = read(paths[pick], false)
+        Module m = moduleAt(paths[pick])
         if (null m) continue
         Object o
         for o in entire(m) do total++
@@ -142,7 +157,7 @@ void writeReport(DB db) {
 
     int done = 0, shownRows = 0, allMissing = 0, allRequirements = 0
     for pick in modulePick do {
-        Module reqs = read(paths[pick], false)
+        Module reqs = moduleAt(paths[pick])
         if (null reqs) {
             print "WARNING: cannot open " paths[pick] "\n"
             continue
@@ -156,10 +171,10 @@ void writeReport(DB db) {
             if (progressCancelled()) break
             if (!isRequirement(o)) continue
             requirements++
-            string prefix = csv(paths[pick]) "," csv(identifier(o)) "," csv(o."Object Text" "") ","
-            int links = writeLinks(out, prefix, o, incoming, through, !missingOnly)
+            string rowStart = csv(paths[pick]) "," csv(identifier(o)) "," csv(o."Object Text" "") ","
+            int links = writeLinks(out, rowStart, o, incoming, through, !missingOnly)
             if (links == 0) {
-                out << prefix "No link,,\n"
+                out << rowStart "No link,,\n"
                 missing++
             }
         }

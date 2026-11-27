@@ -12,8 +12,8 @@ string csv(string s) {
     string result = "\""
     // A spreadsheet runs a cell that starts like a formula.
     if (length(s) > 0) {
-        string first = s[0:0]
-        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+        string lead = s[0:0]
+        if (lead == "=" || lead == "+" || lead == "-" || lead == "@" || lead == "\t" || lead == "\r" || lead == "\n") result = result "'"
     }
     int i
     for (i = 0; i < length(s); i++) {
@@ -28,12 +28,12 @@ if (null latest) {
     print "cannot open " MODULE_PATH "\n"
     halt
 }
-Baseline last = getMostRecentBaseline(latest)
-if (null last) {
+Baseline newest = getMostRecentBaseline(latest)
+if (null newest) {
     print "this module has no baseline\n"
     halt
 }
-Module frozen = load(latest, last, false)
+Module frozen = load(latest, newest, false)
 
 Stream out = write OUTPUT_FILE
 out << "Object,Change,Attribute,Was,Is\n"
@@ -57,17 +57,17 @@ for o in entire(latest) do {
         AttrDef definition
         for definition in latest do {
             if (!definition.object) continue
-            string name = definition.name
+            string attrTitle = definition.name
             // DOORS counts the three text attributes as system ones too; keep
             // those, and skip the other system attributes (dates, users, ...).
-            if (definition.system && name != "Object Heading" && name != "Object Text" && name != "Object Short Text") continue
-            AttrDef earlier = find(frozen, name)
+            if (definition.system && attrTitle != "Object Heading" && attrTitle != "Object Text" && attrTitle != "Object Short Text") continue
+            AttrDef earlier = find(frozen, attrTitle)
             if (null earlier) continue
-            string a = old.name ""
-            string b = o.name ""
+            string a = old.attrTitle ""
+            string b = o.attrTitle ""
             if (a != b) {
                 changed = true
-                out << csv(identifier(o)) ",changed," csv(name) "," csv(a) "," csv(b) "\n"
+                out << csv(identifier(o)) ",changed," csv(attrTitle) "," csv(a) "," csv(b) "\n"
             }
         }
         if (changed) edited++
@@ -75,7 +75,7 @@ for o in entire(latest) do {
 }
 
 close out
-print "Compared with baseline " major(last) "." minor(last) " " suffix(last) "\n"
+print "Compared with baseline " major(newest) "." minor(newest) " " suffix(newest) "\n"
 print "Added: " added "\n"
 print "Deleted: " deleted "\n"
 print "Edited: " edited "\n"

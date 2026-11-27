@@ -4,7 +4,9 @@ string TEST_LINKS = "/Greenhouse Demo/verifies"
 string STATUS_ATTRIBUTE = "Verification Status"
 
 ModName_ other
-for other in obj<-TEST_LINKS do read(fullName(other), false)
+for other in obj<-TEST_LINKS do {
+    if (!open other) read(fullName(other), false)
+}
 
 Link l
 for l in obj<-TEST_LINKS do {

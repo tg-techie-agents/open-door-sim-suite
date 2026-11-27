@@ -5,6 +5,14 @@
 string FOLDER_PATH = "/Greenhouse Demo"
 // ============================================================================
 
+// The module at a path: the one already open, in whatever mode, else read().
+Module moduleAt(string path) {
+    ModName_ named = module(path)
+    if (null named) return null
+    if (open named) return data(moduleVersion(named))
+    return read(path, false)
+}
+
 Folder here = folder(FOLDER_PATH)
 if (null here) {
     print "no folder " FOLDER_PATH "\n"
@@ -15,7 +23,7 @@ Item entry
 for entry in here do {
     if (type(entry) != "Formal") continue
     if (isDeleted entry) continue
-    Module m = read(fullName(entry), false)
+    Module m = moduleAt(fullName(entry))
     if (null m) {
         print "WARNING: cannot open " fullName(entry) "\n"
         continue
@@ -28,8 +36,8 @@ for entry in here do {
         string body = o."Object Text"
         if (body != "") requirements++
     }
-    Baseline last = getMostRecentBaseline(m)
+    Baseline newest = getMostRecentBaseline(m)
     string latest = "none"
-    if (!null last) latest = major(last) "." minor(last) ""
+    if (!null newest) latest = major(newest) "." minor(newest) ""
     print name(entry) ": " objects " objects, " requirements " with text, latest baseline " latest "\n"
 }

@@ -14,6 +14,9 @@ import { export_module, import_csv } from "../io/csvio.ts";
 import { export_reqif, import_reqif } from "../io/reqif.ts";
 
 export const MAX_OUTPUT = 2 * 1024 * 1024;
+// A column is one short cell per object, shown a screenful at a time: a large
+// module's traceability column is far more text than a script should print.
+export const MAX_COLUMN = 32 * 1024 * 1024;
 
 export type Scripts = { names: Record<string, string>; layout: Record<string, string> };
 
@@ -473,7 +476,7 @@ export class Api {
       reply.cells = cells;
       let size = 0;
       for (const text of Object.values(cells)) size += (text as string).length;
-      if (size > MAX_OUTPUT) {
+      if (size > MAX_COLUMN) {
         reply.cells = {};
         reply.error = { line: 0, message: "the column is too large to show", file: null };
       }

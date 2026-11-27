@@ -182,6 +182,7 @@ export class Runtime {
   displays: Map<number, any>;
   state: Map<string, any>;
   deadline: number | null; // ms since the epoch; the script is stopped after it
+  for_depth: number; // for loops now running
 
   constructor(lib: any, store: Store | any, out: any, base_dir: string = ".", ask: any = null, files: any = null) {
     this.lib = lib;
@@ -201,6 +202,7 @@ export class Runtime {
     this.displays = new Map(); // module id -> its filter and sort (lib/displayset.ts)
     this.state = new Map(); // scratch space for library files, keyed by their own names
     this.deadline = null;
+    this.for_depth = 0;
   }
 
   /** How `value " "` renders. */

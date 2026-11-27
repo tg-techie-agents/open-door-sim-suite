@@ -12,8 +12,8 @@ string csv(string s) {
     string result = "\""
     // A spreadsheet runs a cell that starts like a formula.
     if (length(s) > 0) {
-        string first = s[0:0]
-        if (first == "=" || first == "+" || first == "-" || first == "@" || first == "\t" || first == "\r" || first == "\n") result = result "'"
+        string lead = s[0:0]
+        if (lead == "=" || lead == "+" || lead == "-" || lead == "@" || lead == "\t" || lead == "\r" || lead == "\n") result = result "'"
     }
     int i
     for (i = 0; i < length(s); i++) {
@@ -48,8 +48,8 @@ for o in entire(chosen) do {
     if (isDeleted o) continue
     out << csv(identifier(o)) "," level(o) ""
     for (i = 0; i < sizeof(ATTRIBUTES); i++) {
-        string name = ATTRIBUTES[i]
-        out << "," csv(o.name "")
+        string attrTitle = ATTRIBUTES[i]
+        out << "," csv(o.attrTitle "")
     }
     out << "\n"
     rows++

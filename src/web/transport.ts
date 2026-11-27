@@ -41,7 +41,7 @@ const stop_button = element("stop"); // kept here: it moves between the page and
 
 function storage_problem(e: any): void {
   const box = element("storage-problem");
-  box.textContent = "Changes are NOT being saved in this browser: " + (e?.message ?? e)
+  box.textContent = "Changes are NOT being saved in this browser: " + (e?.message || e?.name || e) // some have no message
     + ". Use Database, Save database to a file.";
   box.hidden = false;
 }
@@ -174,6 +174,7 @@ async function perform(operation: string, args: any): Promise<any> {
         dialogs: null };
   }
   if (reply.snapshot) await keep(reply.snapshot);
+  if (reply.not_saved) storage_problem(new Error(reply.not_saved));
   if (reply.error !== undefined) throw new Error(reply.error);
   return reply.result;
 }
@@ -233,7 +234,9 @@ async function replace_database(snapshot: Snapshot | null): Promise<void> {
 async function current_snapshot(): Promise<Snapshot> {
   return in_turn(async () => {
     await engine();
-    return (await send({ type: "save" }, false)).result;
+    const reply = await send({ type: "save" }, false);
+    if (reply.error !== undefined) throw new Error("the database could not be written out: " + reply.error);
+    return reply.result;
   });
 }
 

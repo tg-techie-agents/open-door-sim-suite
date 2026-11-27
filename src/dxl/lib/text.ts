@@ -424,7 +424,14 @@ function _buffers(lib: any): void {
   lib.add("contains", ["Buffer", "char"], "int", _contains_char);
   lib.add("contains", ["Buffer", "char", "int"], "int", _contains_char);
   lib.add("contains", ["Buffer", "string", "int"], "int",
-    (rt: any, b: any, word: string, at: number) => _find_word(_text_of(rt, b), word, at, false));
+    (rt: any, b: any, word: string, at: number) => {
+      const found = _find_word(_text_of(rt, b), word, at, false);
+      if (found >= 0 && found === at) {
+        throw new Fault(`contains: ${py_repr(word)} starts exactly at offset ${at}, and whether DOORS counts `
+          + "that position is not documented; use keyword, or findPlainText");
+      }
+      return found;
+    });
   lib.add("keyword", ["Buffer", "string", "int"], "int",
     (rt: any, b: any, word: string, at: number) => _find_word(_text_of(rt, b), word, at, true));
   lib.index("Buffer", "int", "char", (rt: any, b: any, i: number) => _char_at(_text_of(rt, b), i));
@@ -755,9 +762,7 @@ function _hash(value: any): any {
   return value;
 }
 
-/** Keys come out in order, except string keys of a plain `create` list:
- * DOORS orders those by address, so they come out in insertion order here to
- * keep scripts from relying on an order DOORS would not give. */
+/** Keys come out in order. String keys need createString (see lookup). */
 export class SkipList {
   string_keys: boolean;
   entries: Map<any, any[]>; // lookup key -> [Typed key, Typed data]
@@ -779,6 +784,12 @@ export class SkipList {
   }
 
   lookup(key: any, adding = false): any {
+    // The manual: a `create` list compares keys by address, so two equal strings
+    // need not be the same key. Only createString compares their text.
+    if (key.type === "string" && !this.string_keys) {
+      throw new Fault("string keys in a Skip list made with create are compared by address in DOORS, "
+        + "not by their text: make the list with createString");
+    }
     if (this.key_type !== null && this.key_type !== key.type) {
       throw new Fault(`this Skip list has ${this.key_type} keys, not ${key.type}`);
     }
@@ -788,7 +799,6 @@ export class SkipList {
 
   ordered(): any[][] {
     const pairs = [...this.entries.values()];
-    if (this.key_type === "string" && !this.string_keys) return pairs;
     return pairs.sort((a, b) => _key_order(a[0].value, b[0].value));
   }
 }
@@ -918,8 +928,8 @@ export class DxlDate {
     this.show_time = show_time;
   }
 
-  /** The date `text` spells, or null. Numeric dates are month first unless
-   * that is impossible. */
+  /** The date `text` spells, or null. Numeric dates with slashes are month
+   * first (a US locale); DOORS reads them by the user's locale. */
   static parse(text: string): DxlDate | null {
     text = pyStrip(text);
     for (const [pattern, order] of DATE_PATTERNS) {
@@ -937,7 +947,6 @@ export class DxlDate {
       }
       let day = toInt(part.d), year = toInt(part.y);
       if (part.y.length === 2) year += year >= 70 ? 1900 : 2000;
-      if (order === "mdy" && month > 12) [month, day] = [day, month];
       const clock = order === "ymd" || order === "mdy" ? groups.slice(3) : [];
       const [hour, minute, second] = clock.length ? clock.map((x) => (x ? toInt(x) : 0)) : [0, 0, 0];
       const moment = _datetime(year, month, day, hour, minute, second);

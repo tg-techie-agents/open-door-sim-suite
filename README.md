@@ -18,13 +18,16 @@ organisation's rules before you take a script from here into real DOORS.
 Served from any web server it needs nothing installed; the database stays in
 that browser.
 
-**On your computer.** You need [Node.js](https://nodejs.org) 22.18 or later, and
-nothing else if `dist/` is already built.
+**On your computer.** You need [Node.js](https://nodejs.org) 22.18 or later. A
+fresh copy of the source has no built interface (`dist/`), so you also need
+[bun](https://bun.sh) once, to build it. The command line below needs only
+Node.js.
 
+    sh src/web/build.sh            # once; on Windows run it from Git Bash
     node src/cli.ts serve          # then open http://127.0.0.1:8765/
 
-`start-mac.command` and `start-windows.bat` do the same by double-click.
-Building `dist/` from source needs [bun](https://bun.sh): `sh src/web/build.sh`.
+After the build, `start-mac.command` and `start-windows.bat` start it by
+double-click.
 
 The first start shows an invented hobby-greenhouse project with planted faults:
 missing links, a "TBD", failed tests, and edits since the last baseline.
@@ -125,7 +128,11 @@ DXL, not all of it. Anything else is refused by name with a line number.
 - `pragma runLim` is accepted and not enforced; the command line stops a script after 10 minutes (`--timeout`). Recursion is limited to a few
   hundred levels. No function-pointer parameters; of operator definitions, only `::` ones.
 - ReqIF has not been checked against DOORS.
-- Large modules have not been timed.
+- Large modules: timed only headless on one machine, up to 20,000 objects per
+  module. Every edit saves the whole database, so edits take about a second at
+  that size. Above 500 rows the grid draws only the rows near the screen, so the
+  browser's own find and copy reach only those (the filter and exports cover
+  everything), and column widths can shift while scrolling.
 - Changes are written at once; there is no "close without saving".
 - The interface looks like DOORS from general knowledge, not from a copy of it.
 - DOORS Next is a different product and is out of scope.
@@ -137,6 +144,15 @@ It refuses rather than guesses, so some scripts DOORS accepts are refused:
 - Loop variables must be declared (`Object o` before `for o in m do`).
 - To compare or index an attribute value as text, append `""` first.
 - An `int` result outside 32 bits stops the script.
+- A join that does not end with a string (`print "count: " n`) is refused; add
+  `""` or `"\n"`.
+- A `Skip` list made with `create` refuses string keys; use `createString`.
+- Reading an empty integer, real, or Boolean attribute into a variable stops.
+- Opening an already open module in another mode inside a `for` loop stops, and
+  so does `close(m)` with unsaved changes (use `close(m, true)`, or save first).
+- A day-first slash date such as `23/05/2031` is invalid: slash dates are read
+  month first, as in a US locale. Your DOORS may read and print dates differently.
+- `contains()` on a buffer stops where the word starts exactly at the offset.
 - `<?` and `>?` need parentheses when another operator is beside them.
 - `goodFileName()` takes letters, digits, spaces, `_` and `-`; anything else
   stops the script. `itemFromID()` of a deleted item stops it too, and it knows

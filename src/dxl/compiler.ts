@@ -256,14 +256,19 @@ export class Compiler {
   from_attr(want: string): ((fn: Fn) => Fn) | null {
     const rt = this.rt;
 
+    const no_value = (kind: string): never => {
+      throw new Fault(`the attribute has no value, and what DOORS gives a ${kind} then is not documented; `
+        + 'test it first, e.g. if (!null o."Name" "")');
+    };
     const number = (raw: string, kind: "int" | "real") => {
-      if (!raw) return 0;
+      if (!raw) no_value(kind);
       const value = number_of(raw, kind);
       if (value === null) throw new Fault(`attribute value ${py_repr(raw)} is not a number`);
       return value;
     };
     const boolean = (raw: string) => {
-      if (raw === "True" || raw === "False" || raw === "") return raw === "True";
+      if (!raw) no_value("bool");
+      if (raw === "True" || raw === "False") return raw === "True";
       throw new Fault(`attribute value ${py_repr(raw)} is not a boolean`);
     };
 
@@ -296,7 +301,10 @@ export class Compiler {
 
   expr(node: Node): Cand[] {
     const cands: Cand[] = (this as any)["e_" + node[0]](node);
-    if (!cands.length) throw new DxlError(node[1], "incorrect arguments or concatenation");
+    if (!cands.length) {
+      throw new DxlError(node[1], "incorrect arguments or concatenation"
+        + (node[0] === "juxta" ? ' (when joining values, end with a string, such as "" or "\\n")' : ""));
+    }
     return cands;
   }
 
@@ -1258,9 +1266,17 @@ export class Compiler {
       if (var_.type !== "int" && var_.type !== "real") {
         throw new DxlError(line, `(${op}) is not supported for ${var_.type}`);
       }
+      Compiler.int_only(line, op, var_.type);
       f = Compiler.arithmetic(op[0], var_.type, this.load(line, var_), this.coerce(line, cands, var_.type, true));
     }
     return (env) => put(env, f(env));
+  }
+
+  /** The manual gives these three assignment forms to int alone. */
+  static int_only(line: number, op: string, type_name: string): void {
+    if ((op === "%=" || op === "|=" || op === "&=") && type_name !== "int") {
+      throw new DxlError(line, `(${op}) is not supported for ${type_name}`);
+    }
   }
 
   assign_current(line: number, op: string, source: Node): Fn {
@@ -1329,6 +1345,7 @@ export class Compiler {
     let held: any; // the element before a compound assignment, so the index is worked out once
     if (op !== "=") {
       if (kind !== "int" && kind !== "real") throw new DxlError(line, `(${op}) needs a number`);
+      Compiler.int_only(line, op, kind);
       value = Compiler.arithmetic(op[0], kind, () => held, value);
     }
     return (env) => {
@@ -1384,7 +1401,7 @@ export class Compiler {
     const s = step ? this.statement(step) : null;
     const b = this.loop_body(body);
     const rt = this.rt;
-    return (env) => {
+    return Compiler.in_for(rt, (env) => {
       if (i) i(env);
       while (c === null || c(env)) {
         rt.tick(line);
@@ -1395,6 +1412,18 @@ export class Compiler {
           if (!(e instanceof Continue)) throw e;
         }
         if (s) s(env);
+      }
+    });
+  }
+
+  /** Count the for loops running: DOORS restricts what open modes do in one. */
+  static in_for(rt: Runtime, loop: Fn): Fn {
+    return (env) => {
+      rt.for_depth += 1;
+      try {
+        loop(env);
+      } finally {
+        rt.for_depth -= 1;
       }
     };
   }
@@ -1411,7 +1440,7 @@ export class Compiler {
     const b = this.loop_body(body);
     const rt = this.rt;
 
-    return (env) => {
+    return Compiler.in_for(rt, (env) => {
       for (let item of items(env)) {
         rt.tick(line);
         if (item instanceof Typed) {
@@ -1426,7 +1455,7 @@ export class Compiler {
           if (!(e instanceof Continue)) throw e;
         }
       }
-    };
+    });
   }
 
   /** `all(o -> "x")` and `all(o) -> "x"` become a "links" node whose arrow

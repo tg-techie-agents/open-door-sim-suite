@@ -81,11 +81,11 @@ const TOKEN = new RegExp([
   // a string may run over lines; a backslash at the end of a line has no documented meaning
   String.raw`(?<string>"(?:[^"\\]|\\[^\r\n])*")`,
   String.raw`(?<char>'(?:[^'\\\n]|\\[0-7]{1,3}|\\[^\r\n])')`,
-  String.raw`(?<op><<|>>|<-|->|<\?|>\?|<=|>=|==|!=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|[|~^\-+*\/%<>=!\(\)\{\}\[\],;.:&?])`,
+  String.raw`(?<op><<|>>|<-|->|<\?|>\?|<=|>=|==|!=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|\|=|&=|[|~^\-+*\/%<>=!\(\)\{\}\[\],;.:&?])`,
 ].join("|"), "suy");
 
 // A newline after one of these continues the statement.
-export const CONTINUES: Set<string> = new Set(["<<", ">>", "*=", "/=", "<-", "->", "<=", ">=", "==", "!=", "&&",
+export const CONTINUES: Set<string> = new Set(["<<", ">>", "*=", "/=", "%=", "|=", "&=", "<-", "->", "<=", ">=", "==", "!=", "&&",
   "||", "|", "&", "^", "+=", "-=", "+", "-", "*", "/", "%", "<", ">", "=", "!", "(", "[", "{", ",", "and", "or",
   "?", ":", ".", "~"]);
 
@@ -314,7 +314,7 @@ export class Parser {
   simple(): Node {
     const line = this.tok.line;
     const target = this.expression();
-    for (const op of ["=", "+=", "-=", "*=", "/="]) {
+    for (const op of ["=", "+=", "-=", "*=", "/=", "%=", "|=", "&="]) {
       if (this.accept(op)) {
         const value = this.simple();
         if (value[0] === "expr") return ["assign", line, op, target, value[2]];
