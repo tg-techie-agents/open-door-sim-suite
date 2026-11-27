@@ -37,7 +37,7 @@ The interface opens on a start page (what this is, and what to open), then a
 small desktop, which DOORS does not have, on a phone too. OpenDoor, the saved
 databases, and a folder of files for each database that has any are icons on it:
 double-click or tap opens one, drag moves it, and right-click or long press
-offers Open, Save to file, and Delete. Start, on the taskbar, makes a new
+offers Open, Save to file, Save as project file, and Delete. Start, on the taskbar, makes a new
 database, opens a saved one, adds files, and leads back to the start page. Drag
 text files onto the desktop for scripts to read; what scripts write appears
 there. Its folder says which database a file belongs to; a file in the folder of
@@ -47,6 +47,12 @@ matters. The demo is an invented hobby-greenhouse project with planted faults:
 missing links, a "TBD", failed tests, and edits since the last baseline.
 
 In the browser, the DXL window's Check button does what `check` does.
+
+Open a database file takes a file saved from the page, a project file
+([docs/project-format.md](docs/project-format.md)), or a database file the
+command line made. Save as project file writes the whole database as a project
+file, to read or edit outside the page and open again. A project file holds no
+history and none of the database's files.
 
 ## Command line
 

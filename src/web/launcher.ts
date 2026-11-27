@@ -76,7 +76,7 @@ export async function launcher(host: Host, entered: () => void): Promise<void> {
     // An untouched demo is what Continue already opens.
     ...(last?.demo ? [] : [action("Open the demo", () => attempt(host.demo), !last)]),
     action("Start an empty database", create),
-    h("button", { type: "button", onclick: () => chooseFile(".json,application/json", open) },
+    h("button", { type: "button", onclick: () => chooseFile("", open) },
       "Open a database file", h("small", {}, NOT_NATIVE)));
   actions.querySelector("button.primary").focus();
 }

@@ -309,21 +309,43 @@ async function current_snapshot(): Promise<Snapshot> {
 }
 
 const SUFFIX = ".opendoor.json";
+const PROJECT_SUFFIX = ".opendoor-project.json";
 const MAX_FILE = 5 * 1024 * 1024; // every change writes the files out with the database
 
+// A worker of its own, so that this works whatever state the open database is in.
+function convert(type: "from_project" | "to_project", text: string, name: string): Promise<string> {
+  const made = new Worker("worker.js");
+  return new Promise<string>((resolve, reject) => {
+    made.onerror = (event) => {
+      event.preventDefault();
+      reject(new Error("the engine stopped: " + (event.message || "it could not be loaded")));
+    };
+    made.onmessage = ({ data }) => (data.error === undefined ? resolve(data.result) : reject(new Error(data.error)));
+    made.postMessage({ type, text, name });
+  }).finally(() => made.terminate());
+}
+
+// A database file in any of the three forms: saved from this page, a project
+// file, or the command line's own database file.
 async function read_file(file: File): Promise<Snapshot> {
+  const text = (await file.text()).replace(/^\uFEFF/, "");
   let data: any;
   try {
-    data = JSON.parse(await file.text());
+    data = JSON.parse(text);
   } catch (e) {
     data = null;
   }
-  if (data?.format !== "opendoor-browser" || data.version !== 1 || typeof data.dump !== "string") {
-    throw new Error(`${file.name} is not a database saved from this page. Database files here are not yet compatible `
-      + "with the native database format.");
+  const database = file.name.replace(/(\.opendoor(-project)?)?\.(json|db|odb)$/i, "") || "database";
+  if (data?.format === "opendoor-browser" && data.version === 1 && typeof data.dump === "string") {
+    return { dump: data.dump, database, files: Array.isArray(data.files) ? data.files : [] };
   }
-  return { dump: data.dump, database: file.name.replace(/\.opendoor\.json$|\.json$/i, ""),
-    files: Array.isArray(data.files) ? data.files : [] };
+  if (data?.format === "opendoor-store") return { dump: text, database, files: [] };
+  if (data?.format === "opendoor-project") {
+    return { dump: await convert("from_project", text, file.name), database, files: [] };
+  }
+  throw new Error(`${file.name} is not a database file this page can open: it opens its own saved files, `
+    + "project files (JSON), and the command line's database files. None of these is yet compatible with the "
+    + "native database format.");
 }
 
 // A name no kept database has yet.
@@ -369,6 +391,13 @@ const host: Host = {
       "application/json");
     if (key === current_key()) unsaved = false;
     say(`Saved ${name}. ${NOT_NATIVE}.`);
+  },
+  async save_project(key) {
+    const snapshot = is_open(key) && ready ? await current_snapshot() : (await read_database(key))?.snapshot;
+    if (!snapshot) throw new Error("That database is no longer kept in this browser.");
+    const name = snapshot.database.replace(/(\.opendoor(-project)?)?\.(json|db|odb)$/i, "") + PROJECT_SUFFIX;
+    download(name, await convert("to_project", snapshot.dump, name), "application/json");
+    say(`Saved ${name}. A project file holds no history and none of the database's files.`);
   },
   async remove(key) {
     const open = key === current_key();

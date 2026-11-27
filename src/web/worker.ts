@@ -4,7 +4,7 @@
 
 import { Store, StoreError } from "../store.ts";
 import { VirtualDisk } from "../dxl/files.ts";
-import { load_project } from "../io/project.ts";
+import { dump_project, load_project } from "../io/project.ts";
 import { Api, plain as plain_result } from "./api.ts";
 import "./trace-ops.ts";
 import { EXAMPLE, SCRIPTS } from "./generated/embeds.ts";
@@ -67,6 +67,22 @@ function describe(e: any): string {
 }
 
 scope.onmessage = ({ data }: any) => {
+  // Between a project file and a saved database; neither touches the open one.
+  if (data.type === "from_project" || data.type === "to_project") {
+    try {
+      let result: string;
+      if (data.type === "to_project") result = dump_project(Store.loads(data.text));
+      else {
+        const store = new Store();
+        load_project(store, data.text, data.name);
+        result = store.dumps();
+      }
+      scope.postMessage({ type: "converted", result });
+    } catch (e) {
+      scope.postMessage({ type: "converted", error: describe(e) });
+    }
+    return;
+  }
   if (data.type === "init") {
     try {
       start(data.snapshot, data.empty ?? null, data.demo ?? "demo");

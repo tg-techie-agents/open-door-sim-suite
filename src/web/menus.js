@@ -608,6 +608,9 @@ function helpPage() {
       + "of DOORS. IBM, Rational, and DOORS are IBM's trademarks."),
     h("p", {}, "A database file saved here is not yet compatible with the native database format: it does not open "
       + "in DOORS, and a DOORS database or archive does not open here."),
+    h("p", {}, "Open a database file, on the start page and under Start, takes a file saved from this page, a project "
+      + "file (JSON), or a database file the command line made. On the desktop, a database's menu also saves it as "
+      + "a project file, which holds no history and none of the database's files."),
     h("div", { class: "cov-controls" }, search, " ", kind), holder));
   box.problem.closest("dialog").classList.add("page");
 }

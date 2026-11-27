@@ -18,6 +18,7 @@ export type Host = {
   create(name: string): Promise<void>; // an empty database
   add_database(file: File): Promise<void>;
   save(key: string): Promise<void>; // to a file on the computer
+  save_project(key: string): Promise<void>; // the same as a project file, to read or edit outside
   remove(key: string): Promise<void>;
   files(): Promise<[string, string][]>; // of the database that is open
   files_of(key: string): Promise<[string, string][]>; // of any kept database
@@ -28,7 +29,7 @@ export type Host = {
 };
 
 const ENTERED = "opendoor-entered:" + new URL(".", globalThis.location?.href ?? "http://localhost/").pathname;
-const DATABASE_FILE = /\.opendoor\.json$/i;
+const DATABASE_FILE = /\.opendoor(-project)?\.json$/i;
 
 // A reload in the same tab goes straight back to the work.
 export function entered(): boolean {
@@ -156,18 +157,20 @@ export function desktop(host: Host, surface: HTMLElement): Desktop {
     ]);
   };
 
-  // Files from the computer: a saved database joins the databases, anything else
-  // joins the open database's files. `at` is where they were dropped.
+  // Files from the computer: a database joins the databases (by its name, unless it
+  // was picked as one), anything else joins the open database's files. `at` is where
+  // they were dropped.
   let dropped_at: Cell | null = null;
-  const take = (list: FileList | File[], at: Cell | null = null) => attempt(async () => {
+  const take = (list: FileList | File[], at: Cell | null = null,
+    database = (f: File) => DATABASE_FILE.test(f.name)) => attempt(async () => {
     const dropped = Array.from(list);
     dropped_at = at;
     try {
-      for (const file of dropped.filter((f) => !DATABASE_FILE.test(f.name))) await host.add_file(file);
-      for (const file of dropped.filter((f) => DATABASE_FILE.test(f.name))) await host.add_database(file);
-      const added = dropped.filter((f) => !DATABASE_FILE.test(f.name)).length;
+      for (const file of dropped.filter((f) => !database(f))) await host.add_file(file);
+      for (const file of dropped.filter(database)) await host.add_database(file);
+      const added = dropped.filter((f) => !database(f)).length;
       if (added) say(added === 1 ? "Added to the open database's files folder" : `${added} files added to the open database's files folder`);
-      if (dropped.length === 1 && DATABASE_FILE.test(dropped[0].name)) leave();
+      if (dropped.length === 1 && database(dropped[0])) leave();
     } finally {
       await draw(); // what did come in, even if the next one was refused
       dropped_at = null; // only what this drop made stands there
@@ -343,6 +346,7 @@ export function desktop(host: Host, surface: HTMLElement): Desktop {
     open: () => attempt(() => host.open(k.key), () => { enter(); (window as any).opendoorShow(true); }),
     choices: [
       ["Save to file\n" + NOT_NATIVE, () => attempt(() => host.save(k.key))],
+      ["Save as project file\nJSON, without history or files", () => attempt(() => host.save_project(k.key))],
       ["Delete", () => dialog("Delete database", h("div", {},
         `Delete "${k.name}" from this browser? Unless it is saved to a file, it is gone for good.`), [
         { label: "Delete", action: () => attempt(() => host.remove(k.key), draw) },
@@ -413,7 +417,7 @@ export function desktop(host: Host, surface: HTMLElement): Desktop {
     start_menu(more, from) {
       menu([
         ["New database...", create],
-        ["Open a database file...\n" + NOT_NATIVE, () => chooseFile(".json,application/json", (f) => take([f]))],
+        ["Open a database file...\n" + NOT_NATIVE, () => chooseFile("", (f) => take([f], null, () => true))],
         ["Add files...", () => chooseFile("", (f) => take([f]))],
         ...more,
       ], from, "Start", true);

@@ -3,7 +3,9 @@
 A UTF-8 JSON file holding folders, modules, links, views, and baselines. Load it
 with `node src/cli.ts import DB file.json`; write one with
 `node src/cli.ts export DB file.json`. `examples/example-project.json` is a
-worked example. Loading is all or nothing, and an unknown key is an error, so a
+worked example. In the browser, Open a database file reads one as a database of
+its own, and a database's Save as project file, on the desktop, writes one; the
+database's files are not part of it. Loading is all or nothing, and an unknown key is an error, so a
 misspelling cannot silently drop content.
 
 ```json
