@@ -41,9 +41,10 @@ const S = {
   moduleId: null, data: null, selected: null, showDeleted: false,
   columns: [], inLinks: true, outLinks: true, filter: null, sort: null, quick: "", view: "", dxlColumn: null,
   layout: null, layoutCells: [], // a view made by a script: every column in its order
-  linkStart: null, props: false,
+  linkStart: null, props: false, picks: new Set(),
+  openingReadOnly: false,
   readOnly: false, filterOn: true, advanced: null, sortOn: true, sortDescending: false,
-  outlining: true, maxLevel: 0, collapsed: new Set(), outline: false, outlineClosed: new Set(), outlineFiltered: false,
+  outlining: false, maxLevel: 0, collapsed: new Set(), outline: false, outlineClosed: new Set(), outlineFiltered: false,
   arrows: true, changeBars: true, changes: new Map(), redline: null, redlineCells: new Map(), column: null,
   find: { text: "", with: "", matchCase: false }, clip: null, undo: [],
 };
@@ -234,8 +235,9 @@ function containerForNew() {
 
 function newItem(kind, title) {
   const parent = containerForNew();
-  const specs = [{ name: "name", label: "Name" }, { name: "description", label: "Description" }];
-  if (kind === "formal") specs.push({ name: "prefix", label: "ID prefix (e.g. SR-)" });
+  const specs = [{ name: "name", label: "Name" },
+    { name: "description", label: kind === "formal" ? "Description (heads the main column)" : "Description" }];
+  if (kind === "formal") specs.push({ name: "start", label: "Start IDs at (default 1)" }, { name: "prefix", label: "ID prefix (e.g. SR-)" });
   formDialog(`New ${title} in ${parent.path}`, specs, "Create", async (v) => {
     const made = await api("create_item", { parent: parent.id, kind, ...v });
     S.expanded.add(parent.id);
@@ -280,7 +282,7 @@ const undeleteItem = () => act(async () => {
 function resetView() {
   Object.assign(S, { columns: [], inLinks: true, outLinks: true, filter: null, sort: null, quick: "", view: "", dxlColumn: null,
     layout: null, layoutCells: [], filterOn: true, advanced: null, sortOn: true, sortDescending: false, column: null,
-    maxLevel: 0, collapsed: new Set(), outlineClosed: new Set() });
+    maxLevel: 0, collapsed: new Set(), outlineClosed: new Set(), picks: new Set() });
   TRACE.reset();
 }
 
@@ -300,6 +302,7 @@ async function readModule(id) {
 }
 
 async function openModule(id, absno) {
+  const entering = S.moduleId !== id;
   const data = await readModule(id);
   if (S.moduleId !== id) {
     resetView();
@@ -308,7 +311,10 @@ async function openModule(id, absno) {
   }
   S.moduleId = id;
   S.data = data;
+  // each opening for editing is a history session
+  if (entering && current() && !S.openingReadOnly) await api("record_session", { module: id });
   S.selected = data.rows.some((r) => r.absno === absno) ? absno : (data.rows[0] || {}).absno ?? null;
+  S.picks = new Set();
   await computeLayoutCells();
   await TRACE.load();
   await loadChanges();
@@ -323,6 +329,7 @@ async function refresh(options) {
   const scroll = [$("main").scrollTop, $("main").scrollLeft];
   S.data = await readModule(S.moduleId);
   if (!S.data.rows.some((r) => r.absno === S.selected)) S.selected = (S.data.rows[0] || {}).absno ?? null;
+  S.picks = new Set(S.data.rows.filter((r) => S.picks.has(r.absno)).map((r) => r.absno));
   if (S.dxlColumn) await computeDxlColumn();
   await computeLayoutCells();
   await TRACE.load();
@@ -341,6 +348,7 @@ async function goTo(module, absno) {
   clearFilters();
   if (module === S.moduleId) {
     S.selected = absno;
+    S.picks = new Set();
     render();
     scrollToSelected();
   } else {
@@ -392,7 +400,8 @@ function passes(row) {
 }
 
 function visibleRows() {
-  const rows = outlineRows(S.data.rows.filter(passes));
+  let rows = outlineRows(S.data.rows.filter(passes));
+  if (S.outlining) rows = rows.filter((r) => r.values["Object Heading"]);
   if (!S.sort || !S.sortOn) return rows;
   const definition = attribute(S.sort);
   const key = (row) => {
@@ -568,9 +577,9 @@ function renderMain() {
       ...(width ? { style: `width:${width}px;min-width:${width}px` } : {}) }, title);
   };
   const head = h("tr", {},
-    S.layout ? S.layout.map((c, i) => heading(c.title ?? ({ id: "ID", main: m.name, attribute: c.attribute, dxl: "DXL" }[c.kind] || ""),
+    S.layout ? S.layout.map((c, i) => heading(c.title ?? ({ id: "ID", main: m.description || m.name, attribute: c.attribute, dxl: "DXL" }[c.kind] || ""),
       i, c.kind === "id" ? "ID" : c.kind === "attribute" ? c.attribute : null, c.width))
-      : [heading("ID", 0, "ID"), heading(m.name, 1, null), attributeColumns.map((c, i) => heading(c, i + 2, c))],
+      : [heading("ID", 0, "ID"), heading(m.description || m.name, 1, null), attributeColumns.map((c, i) => heading(c, i + 2, c))],
     S.outLinks ? heading("Out-links", null, null) : null, S.inLinks ? heading("In-links", null, null) : null,
     S.dxlColumn ? heading(S.dxlColumn.title, null, null) : null,
     extra.map((c) => heading(c.title, null, null)));
@@ -616,7 +625,8 @@ function renderMain() {
 
 function showStatus() {
   const row = selectedRow();
-  $("counts").textContent = [row ? `${row.id} (${row.number})` : null, ...(S.statusParts || [])].filter(Boolean).join(" | ");
+  $("counts").textContent = [row ? `${row.id} (${row.number})` : null, S.picks.size ? `${S.picks.size} selected` : null,
+    ...(S.statusParts || [])].filter(Boolean).join(" | ");
 }
 
 function renderRow(row, attributeColumns, extra) {
@@ -632,7 +642,8 @@ function renderRow(row, attributeColumns, extra) {
   const arrow = (direction, mark, list) => (list.length && S.arrows ? h("button", { type: "button", class: "mark " + direction,
     title: `${list.length} ${direction}-link(s)`, onclick: (e) => arrowMenu(e, row, direction),
     oncontextmenu: (e) => arrowMenu(e, row, direction) }, mark) : null);
-  const starts = S.linkStart && S.linkStart.module === S.moduleId && S.linkStart.absno === row.absno;
+  const starts = S.linkStart && S.linkStart.module === S.moduleId && S.linkStart.absnos.includes(row.absno);
+  const more = S.maxLevel && row.level === S.maxLevel && S.data.rows.some((r) => r.parent === row.absno);
   const main = h("td", {
     class: "main" + (S.changes.has(row.absno) ? " changed" : ""),
     title: changeTitle(row) || undefined,
@@ -644,22 +655,29 @@ function renderRow(row, attributeColumns, extra) {
   arrow("out", "▶", row.out),
   starts ? h("span", { class: "mark start", title: "A link starts here" }, "◆") : null,
   isSuspectRow(row) ? h("span", { class: "mark suspect", title: "Suspect link" }, "S") : null,
-  h("div", { style: `padding-left:${S.outlining ? (row.level - 1) * 16 : 0}px` },
-    S.outlining ? h("span", { class: "number" }, row.number) : null,
+  h("div", { style: `padding-left:${(row.level - 1) * 16}px` },
+    h("span", { class: "number" }, row.number),
+    more ? h("span", { class: "collapsed", title: "Has objects below the level shown" }, "> ") : null,
     S.collapsed.has(row.absno) ? h("span", { class: "collapsed", title: "Collapsed: objects below are hidden" }, "[+] ") : null,
     heading ? part("Object Heading", "heading", heading) : null,
     !heading && !text && short ? part("Object Short Text", "short", short) : null,
-    h("div", { class: "text" }, text)));
-  if (heading && !text) main.querySelector(".text").style.minHeight = "0";
+    h("div", { class: "text" }, S.outlining ? "" : text)));
+  if (S.outlining || (heading && !text)) main.querySelector(".text").style.minHeight = "0";
 
   return h("tr", {
-    class: [`level${Math.min(row.level, 3)}`, row.deleted ? "deleted" : "", row.absno === S.selected ? "picked" : ""].join(" "),
+    class: [`level${Math.min(row.level, 3)}`, row.deleted ? "deleted" : "", row.absno === S.selected ? "picked" : "",
+      S.picks.has(row.absno) ? "chosen" : "", starts ? "linkstart" : ""].join(" "),
     "data-absno": row.absno,
-    onmousedown: () => select(row.absno),
+    onmousedown: (e) => {
+      if (e.shiftKey && !e.target.closest("input, textarea, select")) {
+        e.preventDefault(); // not a text selection
+        extendSelection(row.absno);
+      } else if (e.button === 0 || !S.picks.has(row.absno)) select(row.absno);
+    },
     oncontextmenu: (e) => {
       if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
       e.preventDefault();
-      select(row.absno);
+      if (!S.picks.has(row.absno)) select(row.absno);
       showMenu(objectMenu(), e.clientX, e.clientY);
     },
   },
@@ -752,6 +770,15 @@ function traceEntry(link, direction) {
 }
 
 function select(absno) {
+  if (S.picks.size) {
+    S.picks = new Set();
+    for (const row of document.querySelectorAll("#main tr.chosen")) row.classList.remove("chosen");
+    if (S.selected === absno) {
+      renderToolbar();
+      renderProps();
+      showStatus();
+    }
+  }
   if (S.selected === absno) return;
   // Let an open editor save (for the object it belongs to) before the panel is rebuilt.
   if (document.activeElement && $("props").contains(document.activeElement)) document.activeElement.blur();
@@ -886,6 +913,8 @@ function renderProps() {
 
   panel.replaceChildren(...[
     h("h3", {}, `${row.id}  ${row.number}`, close),
+    several() ? h("p", { class: "hint" }, `${S.picks.size} objects are selected. The fields here change ${row.id} only. `,
+      editable ? h("button", { type: "button", onclick: () => act(manyDialog) }, "Edit all selected...") : null) : null,
     row.deleted ? h("p", {}, "This object is deleted. ", h("button", { onclick: undeleteObject }, "Undelete")) : null,
     ...fields,
     h("h4", {}, "Out-links"), ...links(row.out, true),
@@ -914,6 +943,7 @@ function needObject(editing) {
 const addObject = (where) => act(async () => {
   if (!S.data) throw new Error("Open a formal module first.");
   if (!writable()) throw new Error(can.write() + ".");
+  if (where === "after" && !selectedRow()) where = "end"; // the first object of an empty module
   const ref = where === "end" ? null : needObject(true).absno;
   const made = await api("add_object", { module: S.moduleId, ref, where });
   clearFilters();
@@ -933,25 +963,46 @@ const objectOperation = (operation, extra) => act(async () => {
 });
 
 const move = (direction) => act(async () => {
-  const row = needObject(true), module = S.moduleId, absno = row.absno;
-  await api("move_object", { module, absno, direction });
+  const why = can.move(direction);
+  if (why) throw new Error(why);
+  const module = S.moduleId, tops = topRows(chosenRows()).filter((r) => !r.deleted);
+  const absnos = tops.map((r) => r.absno);
+  await api("move_objects", { module, absnos, direction });
   // up and down undo each other; promote and demote do not
   const back = { up: "down", down: "up" }[direction];
-  if (back) remember(`move of ${row.id}`, () => api("move_object", { module, absno, direction: back }));
+  if (back) {
+    remember(`move of ${tops.length > 1 ? tops.length + " objects" : tops[0].id}`,
+      () => api("move_objects", { module, absnos, direction: back }));
+  }
   await refresh();
   scrollToSelected();
 });
-const undeleteObject = () => objectOperation("undelete_object");
 
+const undeleteObject = () => act(async () => {
+  const why = can.undelete();
+  if (why) throw new Error(why);
+  const absnos = chosenRows().filter((r) => r.deleted).map((r) => r.absno);
+  await api("undelete_objects", { module: S.moduleId, absnos });
+  await refresh();
+  scrollToSelected();
+});
+
+// The object or the selection, with everything below, as DOORS deletes it.
 const deleteObject = () => act(async () => {
-  const row = needObject(true);
-  if (row.deleted) throw new Error(`${row.id} is already deleted.`);
-  confirmDialog("Delete object", `Delete ${row.id}? It can be undeleted (View, Deleted objects).`, "Delete", async () => {
-    const module = S.moduleId;
-    await api("delete_object", { module, absno: row.absno });
-    remember(`deletion of ${row.id}`, () => api("undelete_object", { module, absno: row.absno }));
-    await refresh();
-  });
+  const why = can.remove();
+  if (why) throw new Error(why);
+  const module = S.moduleId, tops = topRows(chosenRows()).filter((r) => !r.deleted);
+  if (!tops.length) throw new Error("Already deleted.");
+  const going = treeRows(tops).filter((r) => !r.deleted);
+  const below = going.length - tops.length;
+  const what = tops.length === 1 ? tops[0].id : `${tops.length} objects`;
+  confirmDialog("Delete", `Delete ${what}${below ? ` and the ${below} object(s) below` : ""}${unseen(going)}? `
+    + "They can be undeleted (View, Show deleted objects).", "Delete", async () => {
+      const reply = await api("delete_objects", { module, absnos: tops.map((r) => r.absno) });
+      remember(`deletion of ${what}`, () => api("undelete_objects", { module, absnos: reply.deleted }));
+      S.picks = new Set();
+      await refresh();
+    });
 });
 
 async function historyDialog(absno) {
@@ -995,21 +1046,38 @@ async function linkDialog() {
   ]);
 }
 
-const startLink = () => act(async () => {
-  const row = needObject(true);
-  S.linkStart = { module: S.moduleId, absno: row.absno, id: row.id };
+const startLink = () => act(async () => allOrCurrent("Start link", (rows) => {
+  const id = rows.length > 1 ? `${rows.length} objects from ${rows[0].id}` : rows[0].id;
+  S.linkStart = { module: S.moduleId, absnos: rows.map((r) => r.absno), ids: rows.map((r) => r.id), id };
   renderMain();
-  say(`Link starts at ${row.id}. Select the target, then Link, Make link from start.`);
-});
+  say(`Link starts at ${id}. Select the other end, then Link, Make link from start (or to start).`);
+}));
+
+// Links between the link start and these objects: from the start, or to it.
+async function linkWithStart(rows, fromStart) {
+  const { module, absnos, ids, id } = S.linkStart;
+  const here = S.moduleId;
+  const name = rows.length > 1 ? `${rows.length} objects` : rows[0].id;
+  const [from, to] = fromStart ? [id, name] : [name, id];
+  let told;
+  if (absnos.length === 1 && rows.length === 1) {
+    const source = fromStart ? { module, absno: absnos[0] } : { module: here, absno: rows[0].absno };
+    const { note } = await api("create_link", { source, target_module: fromStart ? here : module, target: fromStart ? rows[0].id : ids[0] });
+    told = `Linked ${from} to ${to}${note ? ". " + note : ""}`;
+  } else {
+    const start = absnos.map((absno) => ({ module, absno })), other = rows.map((r) => ({ module: here, absno: r.absno }));
+    const reply = await api("create_links", { sources: fromStart ? start : other, targets: fromStart ? other : start });
+    told = `Made ${reply.made} link(s) from ${from} to ${to}; ${reply.existing} already there.`
+      + (reply.refused.length ? ` Refused: ${reply.refused.slice(0, 3).join("; ")}` : "");
+  }
+  await loadTree();
+  await refresh();
+  say(told, told.includes("Refused"));
+}
 
 const finishLink = () => act(async () => {
   if (!S.linkStart) throw new Error("First select the source object and choose Link, Start link.");
-  const row = needObject(true);
-  const { module, absno, id } = S.linkStart;
-  const { note } = await api("create_link", { source: { module, absno }, target_module: S.moduleId, target: row.id });
-  await loadTree();
-  await refresh();
-  say(`Linked ${id} to ${row.id}${note ? ". " + note : ""}`);
+  allOrCurrent("Make link from start", (rows) => linkWithStart(rows, true));
 });
 
 // ---------------------------------------------------------------- views, columns, filters
@@ -1028,7 +1096,7 @@ function renderToolbar() {
   const dxl = toolButton("DXL...", "", () => act(openDxl), { class: "dxl" });
   if (!S.data) return bar.replaceChildren(...explorerTools(), dxl);
   const quick = h("input", { type: "search", id: "quick", placeholder: "Filter text...", value: S.quick,
-    "aria-label": "Filter text", oninput: (e) => { S.quick = e.target.value; renderMain(); } });
+    "aria-label": "Filter text", oninput: (e) => { S.quick = e.target.value; renderMain(); renderOutline(); } });
   const views = field({ type: "select", options: [["", "Standard view"], ...Object.keys(S.data.views)], value: S.view });
   views.setAttribute("aria-label", "View");
   views.addEventListener("change", () => act(() => applyView(views.value)));
@@ -1111,6 +1179,9 @@ function needModule() {
 
 const NO_MODULE = "open a formal module first";
 const BASELINE = "a baseline is read only";
+// Is a sort or a filter changing what the module window shows?
+const reordered = () => !!((S.sort && S.sortOn) || (S.filterOn && (S.quick || S.filter || S.advanced || TRACE.filtering())));
+
 const can = {
   module: () => S.data ? "" : NO_MODULE,
   current: () => !S.data ? NO_MODULE : current() ? "" : BASELINE,
@@ -1118,25 +1189,33 @@ const can = {
   column: () => !S.data ? NO_MODULE : S.column === null ? "click a column heading first" : "",
   paste: () => can.write() || (S.clip ? "" : "cut or copy an object first"),
   object: () => !S.data ? NO_MODULE : selectedRow() ? "" : "select an object first",
+  insert: () => (S.data && !selectedRow() ? can.write() : can.change()),
   change: () => can.object() || can.write() || (selectedRow().deleted ? "the object is deleted" : ""),
   move: (direction) => {
     const why = can.change();
     if (why) return why;
-    const row = selectedRow();
-    const siblings = S.data.rows.filter((r) => r.parent === row.parent && (r === row || !r.deleted));
-    const at = siblings.indexOf(row);
-    if (direction === "up") return at > 0 ? "" : "already first at its level";
-    if (direction === "down") return at < siblings.length - 1 ? "" : "already last at its level";
+    if (reordered()) return "turn sorting and filtering off first";
+    const tops = topRows(chosenRows()).filter((r) => !r.deleted);
+    const row = tops[0];
+    if (tops.some((r) => r.parent !== row.parent)) return "only neighbours at one level move together";
+    const siblings = S.data.rows.filter((r) => r.parent === row.parent && !r.deleted);
+    const first = siblings.indexOf(row), last = siblings.indexOf(tops[tops.length - 1]);
+    if (direction === "up") return first > 0 ? "" : "already first at its level";
+    if (direction === "down") return last < siblings.length - 1 ? "" : "already last at its level";
     if (direction === "promote") return row.parent !== null ? "" : "already at the top level";
-    return at > 0 ? "" : "no object above it at its level";
+    return first > 0 ? "" : "no object above it at its level";
   },
-  remove: () => can.change()
-    || (S.data.rows.some((r) => r.parent === S.selected && !r.deleted) ? "delete its children first" : ""),
-  undelete: () => can.object() || can.write() || (selectedRow().deleted ? "" : "not deleted (see View, Deleted objects)"),
+  remove: () => can.change() || (S.sort && S.sortOn
+    && topRows(chosenRows()).some((r) => S.data.rows.some((c) => c.parent === r.absno && !c.deleted))
+    ? "turn sorting off to delete an object that has objects below it" : ""),
+  undelete: () => can.object() || can.write()
+    || (chosenRows().some((r) => r.deleted) ? "" : "not deleted (see View, Show deleted objects)"),
   compare: () => can.module() || (S.data.baselines.length ? "" : "no baselines yet"),
   baseline: () => !S.data ? NO_MODULE : current() ? "" : "open the current version first",
+  newBaseline: () => can.baseline() || (S.readOnly ? "the module is open read-only" : ""),
   savedView: () => can.write() || (S.view ? "" : "choose a saved view first"),
   linkEnd: () => can.change() || (S.linkStart ? "" : "use Start link first"),
+  outLinks: () => can.change() || (chosenRows().some((r) => r.out.length) ? "" : "no out-links here"),
 };
 
 // The ID, main and attribute columns as a view's layout holds them.
@@ -1294,7 +1373,8 @@ function attributesDialog() {
         h("td", {}, a.name), h("td", {}, a.type + (a.type === a.base ? "" : ` (${a.base}${a.multi ? ", multi-valued" : ""})`)),
         h("td", {}, a.scope), h("td", {}, a.values.join(", ")), h("td", {}, a.default), h("td", {}, value),
         h("td", { class: "code" }, a.dxl),
-        h("td", {}, !editable || standard ? null : [h("button", { onclick: () => act(() => attributeEditDialog(a, draw)) }, "Edit"), " "],
+        h("td", {}, !editable || standard ? null : [h("button", { onclick: () => act(() => attributeEditDialog(a, draw)) }, "Edit"), " ",
+            h("button", { onclick: () => newAttributeDialog(draw, a) }, "Copy"), " "],
           !editable || standard ? null : h("button", { onclick: () => confirmDialog("Delete attribute",
           `Delete "${a.name}" and every value it holds in this module?`, "Delete", async () => {
             await api("delete_attribute", { module: m.id, name: a.name });
@@ -1320,7 +1400,7 @@ function attributesDialog() {
   box = dialog("Attributes of " + m.name, holder);
 }
 
-function newAttributeDialog(after) {
+function newAttributeDialog(after, like) {
   const m = needModule();
   const NEW = "\u0000new";
   const name = field({}), scope = field({ type: "select", options: ["object", "module"] });
@@ -1333,10 +1413,22 @@ function newAttributeDialog(after) {
   const dxl = h("textarea", { class: "code", wrap: "off", spellcheck: false, "aria-label": "Attribute DXL",
     placeholder: "obj.attrDXLName = identifier(obj)" });
   const extra = [h("label", {}, "New type name"), typeName, h("label", {}, "Values, one per line"), values];
+  if (like) {
+    type.value = like.type;
+    scope.value = like.scope;
+    multi.checked = like.multi;
+    inherit.checked = like.inherit;
+    history.checked = like.history;
+    bars.checked = like.bars;
+    dates.checked = like.dates;
+    initial.value = like.default;
+    description.value = like.description;
+    dxl.value = like.dxl;
+  }
   const show = () => extra.forEach((node) => { node.hidden = type.value !== NEW; });
   type.addEventListener("change", show);
   show();
-  dialog("New attribute", h("div", { class: "form" },
+  dialog(like ? "Copy of attribute " + like.name : "New attribute", h("div", { class: "form" },
     h("label", {}, "Name"), name, h("label", {}, "Type"), type, ...extra,
     h("label", {}, "Scope"), scope, h("label", {}, "Multi-valued"), multi, h("label", {}, "Default"), initial,
     h("label", {}, "Description"), description, h("label", {}, "Inherit from the parent object"), inherit,
@@ -1366,12 +1458,16 @@ function newAttributeDialog(after) {
 function newBaselineDialog() {
   const m = needModule();
   if (!current()) throw new Error("Open the current version to baseline it.");
+  if (S.readOnly) throw new Error("The module is open read-only.");
+  const last = S.data.baselines.reduce((most, b) =>
+    !most || b.major > most.major || (b.major === most.major && b.minor > most.minor) ? b : most, null);
+  const minor = last ? `${last.major}.${last.minor + 1}` : "0.1", major = last ? `${last.major + 1}.0` : "1.0";
   formDialog("New baseline of " + m.name, [
-    { name: "major", label: "Major version", type: "checkbox" },
+    { name: "version", label: "Version", type: "select", options: [["minor", `Minor: ${minor}`], ["major", `Major: ${major}`]] },
     { name: "suffix", label: "Suffix (optional)" },
-    { name: "annotation", label: "Annotation", type: "textarea" },
-  ], "Create baseline", async (v) => {
-    const made = await api("create_baseline", { module: m.id, ...v });
+    { name: "annotation", label: "Description", type: "textarea" },
+  ], "Create baseline", async ({ version, suffix, annotation }) => {
+    const made = await api("create_baseline", { module: m.id, major: version === "major", suffix, annotation });
     await refresh();
     say(`Created baseline ${made.label}`);
   });
@@ -1385,8 +1481,11 @@ function baselinesDialog() {
     h("td", {},
       h("button", { onclick: () => { box.close(); act(() => openModule(b.id)); } }, "Open read-only"), " ",
       h("button", { onclick: () => { box.close(); act(() => compareDialog(b.id)); } }, "Compare"))));
+  api("baseline_set_names", { module: m.id }).then((names) => S.data.baselines.forEach((b, i) => {
+    if (names[b.id]) rows[i].children[1].append(h("div", { class: "hint" }, "In baseline set " + names[b.id]));
+  }), (e) => say(e.message, true));
   box = dialog("Baselines of " + m.name,
-    rows.length ? listTable(["Version", "Annotation", "By", "On", ""], rows) : h("p", {}, "There are no baselines yet."),
+    rows.length ? listTable(["Version", "Description", "By", "On", ""], rows) : h("p", {}, "There are no baselines yet."),
     [writable() ? { label: "New baseline...", action: () => { setTimeout(() => act(newBaselineDialog)); } } : null,
       { label: "Close" }].filter(Boolean));
 }
