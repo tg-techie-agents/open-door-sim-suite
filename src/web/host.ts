@@ -38,22 +38,22 @@ export function entered(): boolean {
   }
 }
 
+// For windows.html: has this tab already gone into a database?
+(globalThis as any).opendoorEntered = entered;
+
 const short = (path: string) => path.replace(/^\/work\//, "");
 
-export async function desktop(host: Host): Promise<void> {
-  if (document.querySelector("dialog.desktop")) return;
+// Over the whole page (narrow screens), or as the `surface` behind the windows
+// of windows.html. Returns how to draw it again.
+export function desktop(host: Host, surface: HTMLElement | null = null): () => Promise<void> {
+  if (!surface && document.querySelector("dialog.desktop")) return async () => {};
   const problem = h("p", { class: "problem", role: "alert" });
   const databases = h("div", { class: "tiles" });
   const files = h("section", { hidden: true });
   const back = h("button", { type: "button", class: "primary back", hidden: true, onclick: () => leave() }, "Back to DOORS");
-  // winchild.js offers windows where the screen has room for them.
-  const windows = h("button", { type: "button", hidden: true, onclick: () => {
-    leave();
-    (window as any).opendoorWindows();
-  } }, "Open DOORS in windows");
-  const box = h("dialog", { class: "desktop", "aria-label": "Desktop" },
+  const box = h(surface ? "div" : "dialog", { class: "desktop", "aria-label": "Desktop" },
     h("div", { class: "desk" },
-      h("header", {}, h("h1", {}, "OpenDoor desktop"), h("span", {}, windows, " ", back)),
+      h("header", {}, h("h1", {}, "OpenDoor desktop"), back),
       h("p", {}, "A practice tool for DOORS and DXL; not DOORS. Made-up data only. Everything stays in this browser, "
         + "which can lose it: save a database to a file to keep a copy."),
       problem,
@@ -62,15 +62,19 @@ export async function desktop(host: Host): Promise<void> {
     try {
       sessionStorage.setItem(ENTERED, "yes");
     } catch {
-      // the desktop then shows again after a reload
+      // a reload then starts at the bare desktop
     }
-    box.remove();
+    if (surface) (window as any).opendoorShow();
+    else box.remove();
   };
-  // A browser closes a dialog on a second Escape whatever the page says.
-  box.addEventListener("cancel", (event: Event) => event.preventDefault());
-  box.addEventListener("close", () => { if (box.isConnected) box.showModal(); });
-  document.body.append(box);
-  box.showModal();
+  if (surface) surface.replaceChildren(box);
+  else {
+    // A browser closes a dialog on a second Escape whatever the page says.
+    box.addEventListener("cancel", (event: Event) => event.preventDefault());
+    box.addEventListener("close", () => { if (box.isConnected) box.showModal(); });
+    document.body.append(box);
+    box.showModal();
+  }
 
   let busy = false;
   const attempt = async (work: () => Promise<unknown>, then?: () => unknown) => {
@@ -150,7 +154,11 @@ export async function desktop(host: Host): Promise<void> {
       problem.textContent = e.message;
     }
     const open = kept.find((k) => k.open);
+    // On windows.html DOORS is a program on the desktop.
+    const doors = surface && (open || entered())
+      ? [tile("OpenDoor", "Database Explorer", () => (window as any).opendoorShow(true), [], "doors")] : [];
     databases.replaceChildren(
+      ...doors,
       ...kept.map((k) => tile(k.name, k.open ? "Open now" : "Kept in this browser", () => attempt(() => host.open(k.key), leave), [
         button("Save to file", () => attempt(() => host.save(k.key))),
         button("Delete", () => dialog("Delete database", h("div", {},
@@ -163,9 +171,8 @@ export async function desktop(host: Host): Promise<void> {
       tile("Start a new database", "Empty, for your own work", create, [], "new"),
       tile("Open a database file", "Or drop it on this page", () => chooseFile(".json,application/json", (f) => take([f])), [], "new"));
     // Something is open to go back to once the desktop has been left, or is kept.
-    back.hidden = !(open || entered());
-    files.hidden = back.hidden;
-    windows.hidden = back.hidden || innerWidth <= 700 || !(window as any).opendoorWindows;
+    files.hidden = !(open || entered());
+    back.hidden = files.hidden || surface !== null;
     if (!files.hidden) {
       let list: [string, string][] = [];
       try {
@@ -180,9 +187,10 @@ export async function desktop(host: Host): Promise<void> {
         h("div", { class: "tiles drop" }, list.map(file_tile),
           tile("Add files", "From your computer", () => chooseFile("", (f) => take([f])), [], "new")));
     }
-    (box.querySelector(".tile.open button") ?? box.querySelector(".tile button"))?.focus();
+    if (!surface) (box.querySelector(".tile.open button") ?? box.querySelector(".tile button"))?.focus();
   }
 
   databases.replaceChildren(h("p", { role: "status" }, "Loading..."));
-  await draw();
+  draw();
+  return draw;
 }

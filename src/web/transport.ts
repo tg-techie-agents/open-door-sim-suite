@@ -46,6 +46,11 @@ const shell: any = (() => {
   }
 })();
 
+// DOORS runs in windows over a desktop wherever the screen has room: the app's
+// own page, opened by itself, goes there.
+const leaving = Boolean(!shell && globalThis.document?.getElementById?.("main") && globalThis.window?.innerWidth > 700);
+if (leaving) location.replace("windows.html" + location.search);
+
 const element = (id: string) => document.getElementById(id)!;
 const stop_button = element("stop"); // kept here: it moves between the page and dialogs
 
@@ -61,6 +66,7 @@ async function keep(snapshot: Snapshot, replace = false): Promise<void> {
   last = snapshot;
   kept = true;
   writes++;
+  (window as any).opendoorWritten?.(); // windows.html draws its icons again
   try {
     await write_saved(snapshot, replace);
     unsaved = false;
@@ -211,6 +217,7 @@ function in_turn<T>(work: () => Promise<T>): Promise<T> {
 }
 
 (window as any).opendoorTransport = (operation: string, args: any) => {
+  if (leaving) return new Promise(() => {}); // this page is on its way to windows.html
   const copy = JSON.parse(JSON.stringify(args || {}));
   const result = in_turn(() => perform(operation, copy));
   if (operation !== "run_dxl") return result;
@@ -232,12 +239,17 @@ const send_event: boxes.Send = (session, event) => in_turn(() => perform("dxl_ev
 // as the record `key`. An untouched demo is not kept. If it cannot be opened,
 // what was there stays.
 async function replace_database(key: string, snapshot: Snapshot | null, empty: string | null = null): Promise<void> {
+  // windows.html has windows on the database being left: what is being typed in
+  // them is saved to it first, and then they close.
+  const surface = !document.getElementById("main");
+  if (surface) await (window as any).opendoorFlush();
   if (unsaved) {
     throw new Error("The open database has changes this browser could not save. Save it to a file first.");
   }
   boxes.clear(); // its script belongs to the database being left
   const demo = snapshot || empty !== null ? undefined : await free_name("demo").catch(() => "demo");
-  await in_turn(async () => {
+  const windows: boolean = surface && (window as any).opendoorCloseWindows();
+  const switching = in_turn(async () => {
     const before = { last, kept, key: current_key() };
     try {
       const rev = (await read_database(key))?.rev ?? 0;
@@ -256,6 +268,12 @@ async function replace_database(key: string, snapshot: Snapshot | null, empty: s
       throw e;
     }
   });
+  try {
+    await switching;
+  } finally {
+    if (surface) (window as any).opendoorSwitched(windows);
+  }
+  if (surface) return;
   resetView();
   S.moduleId = S.data = S.selected = S.linkStart = S.clip = S.redline = null;
   S.undo = []; // it names objects of the database that is gone
@@ -357,7 +375,7 @@ const host: Host = {
   use: (path, text) => (window as any).opendoorUse(path, text),
 };
 
-(window as any).opendoorDesktop = () => (shell ? shell.leave("index.html#desktop") : desktop(host));
+(window as any).opendoorDesktop = () => (shell ? shell.showDesktop() : desktop(host));
 
 // What windows.html needs of the engine it holds for its windows.
 (window as any).opendoorEngine = {
@@ -375,8 +393,11 @@ const host: Host = {
 (window as any).opendoorUnsaved = () => unsaved; // leaving the page would lose changes
 
 document.addEventListener("DOMContentLoaded", () => {
-  // windows.html has no app of its own, and its windows have no desktop.
-  if (shell || !document.getElementById("main")) return;
+  if (shell || leaving) return; // a window of windows.html has no desktop of its own
+  if (!document.getElementById("main")) {
+    (window as any).opendoorRedraw = desktop(host, element("surface"));
+    return;
+  }
   if (!entered() || location.hash === "#desktop") desktop(host);
   if (location.hash) history.replaceState(null, "", location.pathname);
   element("menubar").append(h("button", { type: "button", id: "to-desktop", onclick: () => desktop(host) }, "Desktop"));

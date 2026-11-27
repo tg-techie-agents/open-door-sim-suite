@@ -3,7 +3,15 @@ body { overflow: hidden; }
 #bar { display: flex; align-items: center; gap: 10px; padding: 3px 8px; background: #fff3bf; border-bottom: 1px solid var(--edge); font-size: 12px; white-space: nowrap; }
 #tasks { flex: 1; display: flex; gap: 4px; min-width: 0; overflow: auto; }
 #tasks button.front { font-weight: 700; border-color: var(--title); }
-#desk { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #6b7890; }
+#desk { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #2f6f73; }
+#surface { position: absolute; top: 0; bottom: 0; left: 0; right: 0; z-index: 0; }
+#surface.strip { right: auto; width: 200px; }
+#surface.strip .tiles { grid-template-columns: 1fr; }
+#surface.strip p:not(.problem), #surface.strip h1 { display: none; }
+#message { position: fixed; left: 8px; bottom: 6px; z-index: 50; max-width: 60vw; padding: 2px 8px; background: #fff3bf; font-size: 12px; }
+#message:empty { display: none; }
+#message.error { background: #a40000; color: #fff; }
+.win.min { visibility: hidden; }
 .win { position: absolute; display: flex; flex-direction: column; background: var(--face); border: 2px solid #8a93a8; box-shadow: 3px 4px 14px #0006; }
 .win.front { border-color: var(--title); }
 .win .head { display: flex; align-items: center; gap: 4px; padding: 2px 4px; background: #8a93a8; color: #fff; font-weight: 600; cursor: move; user-select: none; touch-action: none; }

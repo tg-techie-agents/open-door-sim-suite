@@ -9,20 +9,22 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="web.css">
+<link rel="stylesheet" href="trace.css">
 <link rel="stylesheet" href="shell.css">
 </head>
 <body>
 <div id="bar"><span>A practice tool, not DOORS, not affiliated with IBM. Made-up data only.</span>
   <span id="tasks"></span>
   <button type="button" id="tile">Tile side by side</button>
-  <button type="button" id="to-single">Single window</button>
-  <button type="button" id="to-desktop">Desktop</button></div>
+  <button type="button" id="show-desktop">Show desktop</button></div>
 <div id="storage-problem" role="alert" hidden></div>
-<main id="desk"></main>
+<main id="desk"><div id="surface"></div></main>
+<span id="message" role="status"></span>
 <div id="menubar" hidden></div>
 <nav id="explorer" hidden></nav>
 <button id="stop" type="button" hidden>Stop script</button>
 <noscript>OpenDoor needs JavaScript.</noscript>
+<script src="base.js"></script>
 <script src="transport.js"></script>
 <script src="shell.js"></script>
 </body>

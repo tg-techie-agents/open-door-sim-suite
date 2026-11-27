@@ -1,7 +1,7 @@
 "use strict";
 // The app's part in windows.html: in a frame there, this makes it one window (the
-// Database Explorer, or one module). On its own page it only offers the way there.
-// Loaded last; it wraps app.js's functions rather than changing them.
+// Database Explorer, or one module). Loaded last; it wraps app.js's functions
+// rather than changing them.
 
 (() => {
   let host = null;
@@ -9,19 +9,13 @@
     host = window.parent === window ? null : window.parent.opendoorShell;
   } catch (e) { /* framed by someone else's page */ }
 
-  if (!host) {
-    window.opendoorWindows = () => {
-      if (window.opendoorUnsaved()) return say("The latest changes are not saved in this browser: save the database to a file first.", true);
-      location.assign("windows.html" + (S.moduleId ? "?open=" + S.moduleId : ""));
-    };
-    window.addEventListener("DOMContentLoaded", () => {
-      if (innerWidth <= 700) return;
-      const button = h("button", { type: "button", id: "to-windows",
-        title: "Several modules side by side, each in its own window", onclick: () => window.opendoorWindows() }, "Windows");
-      $("menubar").insertBefore(button, $("to-desktop"));
+  // A file dropped on DOORS would otherwise replace the page with it.
+  for (const event of ["dragover", "drop"]) {
+    document.addEventListener(event, (e) => {
+      if ([...(e.dataTransfer?.types || [])].includes("Files") && !e.target.closest("dialog.desktop")) e.preventDefault();
     });
-    return;
   }
+  if (!host) return;
 
   const mine = Number(window.frameElement.dataset.module) || 0;
   document.body.classList.add("win", mine ? "win-module" : "win-explorer");

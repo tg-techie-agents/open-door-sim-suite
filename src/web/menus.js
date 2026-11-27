@@ -54,8 +54,8 @@ const FEATURES = {
   print: ["Import and export", "Print...", "part", "the columns and rows on screen through the browser; not just the selected objects"],
   pageSetup: ["Import and export", "Page setup...", "no", "use the browser's own print settings"],
   reports: ["Import and export", "Saved reports...", "no", "make reports with Export view, Print, or a DXL script"],
-  windows: ["Database", "Database Explorer and modules in separate windows", "part", "the Windows button, on screens wider than a phone; nothing is dragged between windows, undo is per window, and running a script closes another window's script dialog boxes", "the Windows button, right of the menus"],
-  desktop: ["Import and export", "Desktop: kept databases and files", "full", "not part of DOORS", "the Desktop button, right of the menus"],
+  windows: ["Database", "Database Explorer and modules in separate windows", "part", "on screens wider than a phone; nothing is dragged between windows, undo is per window, and running a script closes another window's script dialog boxes", "on the desktop: the OpenDoor icon"],
+  desktop: ["Import and export", "Desktop: kept databases and files", "full", "not part of DOORS", "behind the windows (Show desktop); on a phone the Desktop button"],
   // modes and locks
   modeExclusive: ["Editing", "Exclusive edit", "part", "you are the only user, so no lock is taken"],
   modeReadOnly: ["Editing", "Read-only", "part", "holds for editing on screen; a DXL run then has its database changes undone, but a script's dialog box buttons are not held to it"],

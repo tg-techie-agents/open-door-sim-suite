@@ -29,11 +29,12 @@ Node.js.
 After the build, `start-mac.command` and `start-windows.bat` start it by
 double-click.
 
-The interface starts on a desktop, which DOORS does not have: the databases kept
+The interface is a small desktop, which DOORS does not have, with DOORS in windows
+on it (on a phone: one view, with the desktop behind a Desktop button). It holds the databases kept
 in this browser, a new empty one, a database file saved earlier, the demo, and
 the open database's files. Drag text files onto it for scripts to read; what
 scripts write appears there (dragging out to the computer works in Chromium
-browsers; elsewhere click to download). The Desktop button brings it back. A
+browsers; elsewhere click to download). Show desktop uncovers it. A
 browser can discard what it keeps, so save to a file what matters. The demo is an invented hobby-greenhouse project
 with planted faults: missing links, a "TBD", failed tests, and edits since the
 last baseline.
@@ -213,8 +214,8 @@ what it prints is this suite's own wording.
   coverage name by name. Offered there means at least one form works.
 - Baseline sets, module copy, and history sessions work in part; a script stops
   where the manuals do not say what DOORS would do.
-- Windows (the Windows button, on screens wider than a phone) put the Database
-  Explorer and several modules side by side; undo is per window, and running a
+- Windows (on screens wider than a phone) put the Database Explorer and several
+  modules side by side; undo is per window, and running a
   script closes another window's script dialog boxes. A second browser tab on
   the same database cannot save over the first. Drag and drop moves one object
   within its module (drag its ID); nothing is dragged between windows.

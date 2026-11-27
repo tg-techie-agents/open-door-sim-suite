@@ -19,7 +19,7 @@ test("the page does not start before the later scripts have run", async () => {
     addEventListener: listen,
     opendoorTransport: () => { asked++; return new Promise(() => {}); },
   } as any, { get: (own, key) => key in own ? own[key] : anything });
-  runInNewContext(read_file("src/web/app.js"), {
+  runInNewContext(read_file("src/web/base.js") + "\n" + read_file("src/web/app.js"), {
     window, document: new Proxy({ addEventListener: listen } as any,
       { get: (own, key) => key in own ? own[key] : anything }),
     localStorage: anything, sessionStorage: anything, navigator: anything, location: anything,

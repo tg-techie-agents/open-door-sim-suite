@@ -26,6 +26,6 @@ fs.writeFileSync("src/web/generated/embeds.ts",
 for name in transport worker; do
   bun build "src/web/$name.ts" --target=browser --format=iife --minify-whitespace --outfile="$out/$name.js"
 done
-cp src/web/index.html src/web/web.css src/web/app.js src/web/richtext.js src/web/style.css src/web/trace.js src/web/trace.css src/web/extras.js src/web/select.js src/web/menus.js "$out/"
+cp src/web/base.js src/web/index.html src/web/web.css src/web/app.js src/web/richtext.js src/web/style.css src/web/trace.js src/web/trace.css src/web/extras.js src/web/select.js src/web/menus.js "$out/"
 cp src/web/windows.html src/web/shell.js src/web/shell.css src/web/winchild.js src/web/winchild.css "$out/"
 echo "built $out"
