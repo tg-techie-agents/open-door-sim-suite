@@ -126,4 +126,7 @@ body { height: 100dvh; }
 @media (max-width: 700px) {
   .dxlbox:not(.dxlmessage) { left: 4px !important; right: 4px; top: 48px !important; min-width: 0; }
   .dxlmessage { width: calc(100vw - 12px); min-width: 0; }
+  /* a list's columns narrow to fit, rather than the last ones leaving the screen */
+  .dxlbox .dxllist th { min-width: 0 !important; }
+  .dxlbox .dxllist td { white-space: normal; overflow-wrap: anywhere; }
 }

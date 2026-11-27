@@ -139,6 +139,27 @@ function listTable(headings, rows) {
     h("thead", {}, h("tr", {}, headings.map((t) => h("th", {}, t)))), h("tbody", {}, rows));
 }
 
+// listTable for what may be a hundred thousand long: the rows are made a
+// thousand at a time, the first at once and more on request.
+const LIST_PAGE = 1000;
+function longTable(headings, items, row) {
+  const table = listTable(headings, items.slice(0, LIST_PAGE).map(row));
+  if (items.length <= LIST_PAGE) return table;
+  const body = table.querySelector("tbody");
+  let shown = LIST_PAGE;
+  const count = h("span", {});
+  const tell = () => { count.textContent = `Showing ${shown} of ${items.length} rows. `; };
+  const more = h("button", { type: "button", onclick: () => {
+    const next = listTable(headings, items.slice(shown, shown + LIST_PAGE).map(row));
+    for (const line of [...next.querySelector("tbody").children]) body.append(line);
+    shown = Math.min(items.length, shown + LIST_PAGE);
+    tell();
+    if (shown === items.length) more.remove();
+  } }, "Show more");
+  tell();
+  return h("div", {}, table, h("p", {}, count, more));
+}
+
 // ---------------------------------------------------------------- database explorer
 
 async function loadTree() {
@@ -316,6 +337,10 @@ async function goTo(module, absno) {
 }
 
 function scrollToSelected() {
+  if (gridWindowed()) {
+    const index = GRID.rows.findIndex((r) => r.absno === S.selected);
+    if (index >= 0) revealRow(index);
+  }
   const row = document.querySelector("#main tr.picked");
   if (row) row.scrollIntoView({ block: "nearest" });
 }
@@ -375,9 +400,131 @@ function render(options) {
   document.title = (S.data ? S.data.module.name + " - " : "") + "OpenDoor";
 }
 
+// A module of thousands of objects is too many elements for a page to hold and
+// stay usable. Past GRID_ALL rows, only those on and near the screen are built;
+// spacer rows stand for the rest. Printing builds them all.
+const GRID_ALL = 500;
+// `heights` are rows as measured; every other row counts as `estimate`, which is
+// taken once for a `shape` (module and columns) so that the list keeps its length.
+const GRID = { body: null, rows: [], build: null, columns: 0, built: new Map(), heights: new Map(),
+  shape: "", estimate: 0, printing: false };
+
+const gridWindowed = () => !!GRID.body && GRID.body.isConnected && GRID.rows.length > GRID_ALL;
+const rowHeight = (row) => GRID.heights.get(row.absno) || GRID.estimate || 40;
+
+// Where row `index` starts, counted from the first row.
+function rowTop(index) {
+  let top = 0;
+  for (let i = 0; i < index; i++) top += rowHeight(GRID.rows[i]);
+  return top;
+}
+
+// Build the rows that are near `scrollTop`, keeping those already there. The row
+// being edited stays however far it is, and is never moved: that would end the edit.
+function drawRows(scrollTop) {
+  const { body, rows, built } = GRID;
+  const main = $("main");
+  const wanted = new Set();
+  if (GRID.printing) {
+    rows.forEach((row, i) => wanted.add(i));
+  } else {
+    const screen = main.clientHeight || window.innerHeight;
+    const from = scrollTop - screen, to = scrollTop + 2 * screen;
+    let top = 0, first = 0;
+    while (first < rows.length - 1 && top + rowHeight(rows[first]) < from) top += rowHeight(rows[first++]);
+    // past the end (the list has just become shorter): the last screenful
+    if (first === rows.length - 1) {
+      const end = top + rowHeight(rows[first]);
+      while (first > 0 && top > end - 2 * screen) top -= rowHeight(rows[--first]);
+    }
+    for (let i = first; i < rows.length && (top < to || i < first + 30); i++) {
+      wanted.add(i);
+      top += rowHeight(rows[i]);
+    }
+    for (const [index, tr] of built) if (tr.querySelector(".editor")) wanted.add(index);
+  }
+  const spacer = (height) => h("tr", { class: "spacer", "aria-hidden": "true" },
+    h("td", { colSpan: GRID.columns, style: `height:${height}px` }));
+  const nodes = [], kept = new Map();
+  let gap = 0;
+  rows.forEach((row, i) => {
+    if (!wanted.has(i)) {
+      gap += rowHeight(row);
+      return;
+    }
+    if (gap) nodes.push(spacer(gap));
+    gap = 0;
+    const tr = built.get(i) || GRID.build(row);
+    kept.set(i, tr);
+    nodes.push(tr);
+  });
+  if (gap) nodes.push(spacer(gap));
+  const staying = new Set(nodes);
+  for (const node of [...body.children]) if (!staying.has(node)) node.remove();
+  let at = body.firstChild;
+  for (const node of nodes) {
+    if (node === at) at = at.nextSibling;
+    else body.insertBefore(node, at);
+  }
+  GRID.built = kept;
+}
+
+// What the built rows measure, for the spacers.
+function measureRows() {
+  let total = 0, count = 0;
+  for (const [index, tr] of GRID.built) {
+    const height = tr.offsetHeight;
+    if (!height) continue;
+    GRID.heights.set(GRID.rows[index].absno, height);
+    total += height;
+    count++;
+  }
+  if (count && !GRID.estimate) GRID.estimate = total / count;
+}
+
+// The first built row showing below the column headings, and how far down it is.
+function gridAnchor() {
+  const { top: edge, bottom: end } = $("main").getBoundingClientRect();
+  for (const [index, tr] of [...GRID.built].sort((a, b) => a[0] - b[0])) {
+    const box = tr.getBoundingClientRect();
+    if (box.bottom > edge && box.top < end && box.height) return { absno: GRID.rows[index].absno, offset: box.top - edge };
+  }
+  return null;
+}
+
+// Redraw around where the window now is, without what is on screen moving as rows
+// that were only estimated get measured.
+function updateRows() {
+  if (!gridWindowed()) return;
+  const main = $("main");
+  const anchor = gridAnchor(); // nothing built is on screen after a long jump
+  drawRows(main.scrollTop);
+  measureRows();
+  if (!anchor) return;
+  const found = [...GRID.built].find(([index]) => GRID.rows[index].absno === anchor.absno);
+  if (!found) return;
+  const moved = found[1].getBoundingClientRect().top - main.getBoundingClientRect().top - anchor.offset;
+  if (Math.abs(moved) >= 1) main.scrollTop += moved;
+}
+
+// Bring row `index` into the built range and the window.
+function revealRow(index) {
+  const main = $("main");
+  const head = GRID.body.offsetTop, screen = main.clientHeight || window.innerHeight;
+  const top = rowTop(index), bottom = head + top + rowHeight(GRID.rows[index]);
+  let to = main.scrollTop;
+  if (top < to) to = top;
+  else if (bottom > to + screen) to = bottom - screen;
+  drawRows(to); // build there before going there
+  main.scrollTop = to;
+  measureRows();
+}
+
 function renderMain() {
   const main = $("main");
   if (!S.data) {
+    GRID.body = null;
+    main.classList.remove("windowed");
     const node = pickedItem();
     $("counts").textContent = "";
     if (node.deleted) return main.replaceChildren(h("div", { class: "empty" }, node.path + " is deleted. Use File, Undelete item."));
@@ -401,7 +548,19 @@ function renderMain() {
     S.outLinks ? h("th", {}, "Out-links") : null, S.inLinks ? h("th", {}, "In-links") : null,
     S.dxlColumn ? h("th", {}, S.dxlColumn.title) : null,
     extra.map((c) => h("th", {}, c.title)));
-  const body = h("tbody", {}, rows.map((row) => renderRow(row, attributeColumns, extra)));
+  const body = h("tbody", {});
+  const scrolled = main.scrollTop;
+  const shape = `${S.moduleId}\n${head.textContent}`;
+  if (GRID.shape !== shape) {
+    GRID.heights.clear();
+    GRID.estimate = 0;
+  }
+  Object.assign(GRID, { body, rows, shape, built: new Map(), columns: head.children.length,
+    build: (row) => renderRow(row, attributeColumns, extra) });
+  const windowed = rows.length > GRID_ALL;
+  main.classList.toggle("windowed", windowed);
+  if (windowed) drawRows(scrolled);
+  else body.append(...rows.map(GRID.build));
   main.replaceChildren(...[
     m.baseline ? h("div", { class: "banner" }, `Baseline ${m.baseline} of ${m.path} - read only. `,
       h("a", { class: "go", onclick: () => act(() => goTo(m.owner)) }, "Return to the current version")) : null,
@@ -412,6 +571,12 @@ function renderMain() {
   const parts = [`${rows.length} of ${S.data.rows.length} objects`];
   if (S.filter) parts.push("filter on");
   parts.push(...TRACE.status());
+  if (windowed) {
+    // the same place in the list as before the redraw, then true heights
+    main.scrollTop = scrolled;
+    measureRows();
+    drawRows(main.scrollTop);
+  }
   if (S.sort) parts.push("sorted by " + S.sort);
   if (S.linkStart) parts.push("link start: " + S.linkStart.id);
   $("counts").textContent = parts.join(" | ");
@@ -609,6 +774,7 @@ function editCell(row, name, holder) {
 function editMain() {
   const row = selectedRow();
   if (!row || !writable() || row.deleted) return;
+  if (!document.querySelector("#main tr.picked")) scrollToSelected(); // scrolled out of the built rows
   const tr = document.querySelector("#main tr.picked");
   if (!tr) return say(`${row.id} is hidden by the filter. Clear the filter to edit it.`, true);
   const name = row.values["Object Heading"] && !row.values["Object Text"] ? "Object Heading" : "Object Text";
@@ -732,9 +898,8 @@ const deleteObject = () => act(async () => {
 async function historyDialog(absno) {
   const entries = await api("history", { module: S.moduleId, absno: absno === undefined ? null : absno });
   const title = absno === undefined ? "Module history" : "History of " + needObject().id;
-  dialog(title, listTable(["When", "Who", "ID", "Action", "Attribute", "Old value", "New value"],
-    entries.reverse().map((e) => h("tr", {}, [e.when, e.who, e.id, e.action, e.attribute, e.old, e.new]
-      .map((v) => h("td", {}, v))))));
+  dialog(title, longTable(["When", "Who", "ID", "Action", "Attribute", "Old value", "New value"], entries.reverse(),
+    (e) => h("tr", {}, [e.when, e.who, e.id, e.action, e.attribute, e.old, e.new].map((v) => h("td", {}, v)))));
 }
 
 // ---------------------------------------------------------------- links
@@ -1139,10 +1304,10 @@ function compareDialog(preselect) {
     result.replaceChildren(
       h("p", {}, changes.length ? `${changes.length} difference(s). Attribute values, additions and deletions are compared; moves and links are not.`
         : "No differences in attribute values or in which objects exist."),
-      changes.length ? listTable(["ID", "Change", "Attribute", "Old", "New"], changes.map((c) =>
+      changes.length ? longTable(["ID", "Change", "Attribute", "Old", "New"], changes, (c) =>
         h("tr", { class: c.change },
           h("td", {}, c.change === "deleted" ? c.id : h("a", { class: "go", onclick: () => { box.close(); act(() => goTo(target, c.absno)); } }, c.id)),
-          h("td", {}, c.change), h("td", {}, c.attribute), h("td", {}, c.old), h("td", {}, c.new)))) : "");
+          h("td", {}, c.change), h("td", {}, c.attribute), h("td", {}, c.old), h("td", {}, c.new))) : "");
     return false;
   };
   box = dialog("Compare " + m.name, h("div", {}, "From ", old, " to ", current, result),
@@ -1219,7 +1384,10 @@ function exportReqifDialog() {
     ? boxes.map((b, i) => h("label", {}, b, " " + paths[i])) : "There are no formal modules."), [
     { label: "Export", primary: true, action: async () => {
       const file = await api("export_reqif", { modules: boxes.filter((b) => b.checked).map((b) => Number(b.value)) });
-      download(file.filename, Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0)), "application/xml");
+      // a loop: Uint8Array.from takes seconds over a large module
+      const binary = atob(file.base64), bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      download(file.filename, bytes, "application/xml");
       say("Exported " + file.filename);
     } },
     { label: "Cancel" },
@@ -1592,6 +1760,15 @@ function step(by) {
   const at = rows.findIndex((r) => r.absno === S.selected);
   select(rows[Math.max(0, Math.min(rows.length - 1, at + by))].absno);
   scrollToSelected();
+}
+
+$("main").addEventListener("scroll", updateRows, { passive: true });
+window.addEventListener("resize", updateRows);
+for (const [event, printing] of [["beforeprint", true], ["afterprint", false]]) {
+  window.addEventListener(event, () => {
+    GRID.printing = printing;
+    if (gridWindowed()) drawRows($("main").scrollTop);
+  });
 }
 
 buildMenubar();
