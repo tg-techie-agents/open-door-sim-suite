@@ -1,0 +1,42 @@
+/* The traceability tools (trace.js). */
+dialog fieldset { border: 1px solid var(--edge); margin: 0 0 8px; padding: 4px 8px 8px; min-width: 0; }
+dialog label.choice { display: block; padding: 2px 0; }
+dialog label.greyed { color: #777; }
+dialog p > label.choice { display: inline-block; margin-right: 6px; }
+dialog .hint { color: #555; font-size: 12px; max-width: 640px; }
+dialog h4 { margin: 4px 0 6px; }
+.wizard { width: min(520px, 100%); min-height: 250px; }
+.wizard input.short { width: 6em; }
+.wizard select { max-width: 100%; }
+.pick-list { columns: 2 200px; }
+.pick-list label.choice { break-inside: avoid; }
+
+dialog button.plain { background: none; border: 0; padding: 0; text-align: left; text-decoration: underline; color: #003a8c; cursor: pointer; }
+.tabs button { margin-right: 4px; }
+.details .value { background: #fff; border: 1px solid #c8c8c8; padding: 4px 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 600px; }
+.redline { background: #fff; border: 1px solid #c8c8c8; padding: 4px 6px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 600px; }
+.redline del { color: #a40000; text-decoration: line-through; }
+.redline ins { color: #00309c; text-decoration: underline; }
+.redline del + ins { margin-left: 0.35em; }
+.grid td.computed .entry { white-space: pre-wrap; margin-bottom: 4px; }
+
+.matrix-scroll { overflow: auto; max-height: 50vh; max-width: 100%; border: 1px solid var(--edge); background: #fff; }
+table.matrix { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+table.matrix th, table.matrix td { border-right: 1px solid #c8c8c8; border-bottom: 1px solid #c8c8c8; padding: 0; text-align: center; }
+table.matrix th { background: var(--face); padding: 2px 4px; position: sticky; left: 0; z-index: 1; white-space: nowrap; }
+table.matrix thead th { top: 0; z-index: 2; vertical-align: bottom; }
+table.matrix thead th:first-child { z-index: 3; }
+table.matrix thead th.across { left: auto; }
+table.matrix th.across span { writing-mode: vertical-rl; transform: rotate(180deg); }
+table.matrix td { min-width: 24px; height: 24px; }
+table.matrix td.linked button { display: block; width: 100%; min-width: 24px; min-height: 24px; height: 24px; border: 0; border-radius: 0; background: #316ac5; color: #fff; font-weight: 700; padding: 0; cursor: pointer; }
+table.matrix td.suspect-cell button { background: #a40000; }
+.picked-link { margin-top: 6px; }
+.picked-link p { margin: 2px 0; max-width: 640px; }
+
+/* As cards, a computed column starts on its own line, so its indents line up. */
+@media (max-width: 700px) { .grid td.computed::before { display: block; } }
+
+@media (min-width: 701px) {
+  dialog.trace-wide { width: min(1180px, 96vw); max-width: 96vw; }
+}
